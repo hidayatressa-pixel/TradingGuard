@@ -86,9 +86,11 @@ Market Data
     ↓
 Indicators
     ↓
-Strategy (future)
+Strategy / Signal Score
     ↓
 Risk Engine (future)
+    ↓
+Paper Trading (future)
 
 ### EMA
 
@@ -102,10 +104,67 @@ The RSI implementation uses Wilder-style smoothing with a documented flat-market
 
 The MACD implementation uses the EMA layer for the fast and slow components, then derives the signal line from the MACD values and the histogram as `MACD - Signal`. Default periods are fast = 12, slow = 26, and signal = 9. Warm-up values remain `None` until the required EMA windows are valid.
 
+## Strategy / Signal Score
+
+The strategy layer is a read-only assessment layer. It evaluates indicator snapshots for evidence, produces a deterministic raw score, and records which conditions contributed to that score. It does not buy, sell, place orders, or authorize execution.
+
+### Scoring rules
+
+- EMA
+  - bullish: +2 when `ema_fast > ema_slow`
+  - neutral: 0 when `ema_fast == ema_slow`
+  - bearish: -2 when `ema_fast < ema_slow`
+- RSI
+  - overbought: -1 when `rsi >= 70`
+  - oversold: +1 when `rsi <= 30`
+  - neutral: 0 when `30 < rsi < 70`
+- MACD
+  - bullish: +2 when `macd > macd_signal`
+  - neutral: 0 when `macd == macd_signal`
+  - bearish: -2 when `macd < macd_signal`
+
+The raw score is the sum of all evidence contributions and stays within the range of -5 to +5.
+
+### Normalized score
+
+- `-5` maps to `0`
+- `0` maps to `50`
+- `+5` maps to `100`
+- intermediate scores are linearly mapped within that range
+
+Normalized score is NOT probability. It is a descriptive scale for signal posture only.
+
+### Assessment thresholds
+
+- raw <= -4: `STRONG_BEARISH`
+- raw -3 through -2: `BEARISH`
+- raw -1 through +1: `NEUTRAL`
+- raw +2 through +3: `BULLISH`
+- raw >= +4: `STRONG_BULLISH`
+
+### Readiness and look-ahead protection
+
+A `StrategyResult` is ready only when all required indicator values are present:
+- `ema_fast`
+- `ema_slow`
+- `rsi`
+- `macd`
+- `macd_signal`
+
+The service requires chronological, non-duplicate timestamps and does not use future values in the current evaluation. This is a no-look-ahead design.
+
+### Safety and scope
+
+- BULLISH does NOT mean BUY.
+- BEARISH does NOT mean SELL.
+- Strategy output does NOT authorize a trade.
+- Current market data is simulated.
+- This layer intentionally excludes broker logic, execution logic, AI/ML, credentials, and API keys.
+
 ### Scope and safety
 
-The current market data remains simulated and offline by design. Indicator output is a mathematical transformation of historical or mock data only, and it is not a prediction, trade signal, recommendation, or risk decision.
+The current market data remains simulated and offline by design. Indicator output and strategy assessment are mathematical transformations of mock or historical data only, and they are not predictions, trade recommendations, or risk decisions.
 
 ## Current status
 
-This project currently provides the initial modular architecture, mock dashboard data, a simulated market data engine, and a deterministic indicator layer with EMA, RSI, and MACD calculations. It deliberately does not include live trading, broker integration, order execution, signal scoring, or prediction logic.
+This project currently provides the initial modular architecture, mock dashboard data, a simulated market data engine, deterministic indicator calculations, and a read-only strategy scoring layer with EMA, RSI, and MACD evidence. It deliberately does not include live trading, broker integration, order execution, AI-powered prediction, or credentialed access.
