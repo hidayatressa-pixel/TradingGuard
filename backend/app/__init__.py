@@ -1,0 +1,1 @@
+"""TradingGuard backend application package."""
