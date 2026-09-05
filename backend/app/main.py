@@ -1,17 +1,53 @@
-from fastapi import FastAPI, HTTPException, Query
+from datetime import datetime
+
+from fastapi import Body, FastAPI, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 
 from backend.app.indicators.models import IndicatorSnapshot
 from backend.app.indicators.service import IndicatorService
 from backend.app.market.data_provider import MockMarketDataProvider
 from backend.app.market.models import Candle
 from backend.app.market.validation import validate_candle_dataset
-from backend.app.strategy.models import StrategyResult
+from backend.app.risk.models import RiskContext, RiskPolicy, RiskResult
+from backend.app.risk.service import RiskService
+from backend.app.strategy.models import Assessment, StrategyEvidence, StrategyResult
 from backend.app.strategy.service import StrategyService
 
-app = FastAPI(title="TradingGuard", version="0.4.0")
+
+class StrategyEvidenceInput(BaseModel):
+    model_config = ConfigDict()
+
+    indicator: str
+    condition: str
+    contribution: int
+    description: str
+
+
+class StrategyResultInput(BaseModel):
+    model_config = ConfigDict()
+
+    timestamp: datetime | str
+    symbol: str
+    timeframe: str
+    score: int
+    normalized_score: int
+    assessment: Assessment | str
+    data_ready: bool
+    evidence: list[StrategyEvidenceInput]
+
+
+class RiskEvaluateRequest(BaseModel):
+    model_config = ConfigDict()
+
+    strategy: StrategyResultInput
+    context: dict
+    policy: dict | None = None
+
+app = FastAPI(title="TradingGuard", version="0.5.0")
 provider = MockMarketDataProvider()
 indicator_service = IndicatorService()
 strategy_service = StrategyService()
+risk_service = RiskService()
 
 
 @app.get("/health")
@@ -70,3 +106,27 @@ def get_strategy(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return results
+
+
+@app.post("/risk/evaluate", response_model=RiskResult)
+def evaluate_risk(
+    payload: dict = Body(...),
+) -> RiskResult:
+    try:
+        request = RiskEvaluateRequest.model_validate(payload)
+        strategy_payload = request.strategy.model_dump()
+        strategy_payload["timestamp"] = datetime.fromisoformat(str(strategy_payload["timestamp"]).replace("Z", "+00:00"))
+        strategy_payload["assessment"] = Assessment(strategy_payload["assessment"])
+
+        for evidence in strategy_payload.get("evidence", []):
+            evidence["indicator"] = str(evidence["indicator"])
+            evidence["condition"] = str(evidence["condition"])
+            evidence["description"] = str(evidence["description"])
+
+        strategy = StrategyResult.model_validate(strategy_payload)
+        context = RiskContext.model_validate(request.context)
+        policy = RiskPolicy.model_validate(request.policy or {})
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return risk_service.evaluate(strategy, context, policy)
