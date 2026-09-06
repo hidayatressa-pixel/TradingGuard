@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from backend.app.market.models import Candle
 from backend.app.paper.auto_loop import AutoPaperLoopService
 from backend.app.paper.models import PaperTradingConfig
@@ -10,11 +12,11 @@ from backend.app.strategy.models import Assessment, StrategyResult
 TS = datetime(2026, 9, 6, tzinfo=timezone.utc)
 
 
-def candles(count: int) -> list[Candle]:
+def candles(count: int, symbol: str = "BTCUSDT", timeframe: str = "1h") -> list[Candle]:
     result = []
     for i in range(count):
         base = 100.0 + i * 0.4
-        result.append(Candle(timestamp=TS + timedelta(hours=i), symbol="BTCUSDT", timeframe="1h",
+        result.append(Candle(timestamp=TS + timedelta(hours=i), symbol=symbol, timeframe=timeframe,
             open=base, high=base + 1.2, low=base - 1.0, close=base + 0.5, volume=1000.0 + i))
     return result
 
@@ -63,16 +65,34 @@ def test_next_completed_candle_revalidates_and_executes_pending_sized_entry(monk
     assert second.authorization.gate.risk.decision == RiskDecision.ALLOW
 
 
-def test_same_completed_candle_is_idempotent_and_does_not_advance_execution_clock(monkeypatch) -> None:
+def test_same_completed_candle_is_idempotent_and_reports_pending_state(monkeypatch) -> None:
     service, loop = started_loop(); force_bullish(loop, monkeypatch); data = candles(40)
     first = loop.cycle(data); before = service.state().event_index
     repeated = loop.cycle(data)
     assert repeated.account.event_index == before
     assert repeated.account.open_position is None
     assert repeated.account.pending_entry is not None
-    assert repeated.authorization is not None
     assert repeated.authorization == first.authorization
-    assert "already processed" in repeated.reason
+    assert "remains pending" in repeated.reason
+
+
+def test_duplicate_active_position_reports_monitoring_not_setup_wait(monkeypatch) -> None:
+    service, loop = started_loop(); force_bullish(loop, monkeypatch)
+    loop.cycle(candles(40)); loop.cycle(candles(41))
+    repeated = loop.cycle(candles(41))
+    assert repeated.account.open_position is not None
+    assert "remains active" in repeated.reason
+    assert "setup" not in repeated.reason.lower()
+
+
+def test_operational_instrument_is_locked_while_pending(monkeypatch) -> None:
+    service, loop = started_loop(); force_bullish(loop, monkeypatch)
+    loop.cycle(candles(40, "ETHUSDT", "1h"))
+    assert service.state().pending_entry is not None
+    with pytest.raises(ValueError, match="locked to ETHUSDT/1h"):
+        loop.cycle(candles(41, "BTCUSDT", "1h"))
+    assert service.state().pending_entry is not None
+    assert service.state().pending_entry.symbol == "ETHUSDT"
 
 
 def test_eligible_bullish_flat_cycle_never_returns_unevaluated_wait(monkeypatch) -> None:
