@@ -6,8 +6,9 @@ from backend.app.main import app, auto_paper_loop, paper_service
 from backend.app.market.models import Candle
 from backend.app.paper.auto_loop import AutoPaperCycleResult
 from backend.app.paper.orchestration import AutoPaperEntryResult
+from backend.app.risk.integration import ProspectiveRiskGateResult
 from backend.app.risk.models import RiskDecision, RiskResult
-from backend.app.risk_sizing.models import ProspectiveRiskGateResult, RiskSizingResult
+from backend.app.risk_sizing.models import RiskSizingResult
 from backend.app.strategy.models import Assessment, StrategyResult
 
 client = TestClient(app)
