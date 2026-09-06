@@ -3,6 +3,8 @@ from datetime import datetime
 from fastapi import Body, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
+from backend.app.backtest.models import BacktestConfig, BacktestResult
+from backend.app.backtest.service import BacktestService
 from backend.app.indicators.models import IndicatorSnapshot
 from backend.app.indicators.service import IndicatorService
 from backend.app.market.data_provider import MockMarketDataProvider
@@ -43,11 +45,21 @@ class RiskEvaluateRequest(BaseModel):
     context: dict
     policy: dict | None = None
 
-app = FastAPI(title="TradingGuard", version="0.5.0")
+
+class BacktestEvaluateRequest(BaseModel):
+    model_config = ConfigDict()
+
+    candles: list[dict]
+    strategy_results: list[dict]
+    config: dict | None = None
+
+
+app = FastAPI(title="TradingGuard", version="0.6.0")
 provider = MockMarketDataProvider()
 indicator_service = IndicatorService()
 strategy_service = StrategyService()
 risk_service = RiskService()
+backtest_service = BacktestService()
 
 
 @app.get("/health")
@@ -130,3 +142,32 @@ def evaluate_risk(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return risk_service.evaluate(strategy, context, policy)
+
+
+@app.post("/backtest/evaluate", response_model=BacktestResult)
+def evaluate_backtest(
+    payload: dict = Body(...),
+) -> BacktestResult:
+    try:
+        request = BacktestEvaluateRequest.model_validate(payload)
+        candles_payload = []
+        for item in request.candles:
+            candle = dict(item)
+            candle["timestamp"] = datetime.fromisoformat(str(candle["timestamp"]).replace("Z", "+00:00"))
+            candles_payload.append(candle)
+        candles = [Candle.model_validate(item) for item in candles_payload]
+
+        strategy_results: list[StrategyResult] = []
+        for item in request.strategy_results:
+            strategy_payload = dict(item)
+            strategy_payload["timestamp"] = datetime.fromisoformat(str(strategy_payload["timestamp"]).replace("Z", "+00:00"))
+            strategy_payload["assessment"] = Assessment(strategy_payload["assessment"])
+            for evidence in strategy_payload.get("evidence", []):
+                evidence["indicator"] = str(evidence["indicator"])
+                evidence["condition"] = str(evidence["condition"])
+                evidence["description"] = str(evidence["description"])
+            strategy_results.append(StrategyResult.model_validate(strategy_payload))
+        config = BacktestConfig.model_validate(request.config or {})
+        return backtest_service.evaluate(candles, strategy_results, config)
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

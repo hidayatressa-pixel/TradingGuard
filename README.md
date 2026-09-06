@@ -165,6 +165,24 @@ The service requires chronological, non-duplicate timestamps and does not use fu
 
 The current market data remains simulated and offline by design. Indicator output and strategy assessment are mathematical transformations of mock or historical data only, and they are not predictions, trade recommendations, or risk decisions.
 
+## V0.6 Backtest and Profit Evaluation
+
+The V0.6 layer is a deterministic historical evaluation engine. It is intentionally a calculation-only module and does not place live orders, connect to brokers, optimize parameters, or assume future knowledge.
+
+### Scope and conventions
+
+- Long-only historical simulation only.
+- No leverage and no short positions.
+- Execution is next-bar open, with signal timestamps remaining tied to the originating bar and the actual fill on the next bar open.
+- Transaction costs and slippage are applied explicitly to entry and exit notional amounts.
+- A position is closed on the first bearish or neutral exit signal, executed on the following bar, or forcibly at the last available close if the data ends while the trade remains open.
+- `INSUFFICIENT_DATA` never opens or closes a position and does not fabricate a signal.
+- Realized-equity drawdown is computed from the timeline of completed trade equity values.
+- `profit_factor` is `None` when there are no gross losses, which matches a zero-loss scenario rather than a dividing-by-zero result.
+- Historical performance is not a guarantee of future results and must not be treated as a live trading recommendation.
+
+This V0.6 engine is separate from the V0.5 risk engine. Risk remains a read-only gate on strategy quality, while backtesting is the historical performance evaluation layer that measures the realized impact of those signals.
+
 ## Current status
 
-This project currently provides the initial modular architecture, mock dashboard data, a simulated market data engine, deterministic indicator calculations, and a read-only strategy scoring layer with EMA, RSI, and MACD evidence. It deliberately does not include live trading, broker integration, order execution, AI-powered prediction, or credentialed access.
+This project currently provides the initial modular architecture, mock dashboard data, a simulated market data engine, deterministic indicator calculations, a read-only strategy scoring layer with EMA, RSI, and MACD evidence, and a deterministic V0.6 backtest/performance evaluation engine. It deliberately does not include live trading, broker integration, order execution, AI-powered prediction, or credentialed access.

@@ -1,23 +1,20 @@
-"""Placeholder backtesting engine."""
+"""Deterministic backtesting engine for TradingGuard."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from backend.app.market.models import Candle
+from backend.app.strategy.models import StrategyResult
 
-
-@dataclass
-class BacktestResult:
-    net_return: float
-    win_rate: float
-    benchmark: str
+from .models import BacktestConfig, BacktestResult
+from .service import BacktestService
 
 
 class BacktestEngine:
-    """Runs a historical simulation without live order execution."""
+    """Compatibility wrapper around the V0.6 historical evaluation service."""
 
-    def run(self) -> BacktestResult:
-        return BacktestResult(
-            net_return=0.08,
-            win_rate=0.55,
-            benchmark="buy-and-hold",
-        )
+    def __init__(self, config: BacktestConfig | None = None) -> None:
+        self.config = config or BacktestConfig()
+        self.service = BacktestService()
+
+    def run(self, candles: list[Candle], strategy_results: list[StrategyResult]) -> BacktestResult:
+        return self.service.evaluate(candles, strategy_results, self.config)
