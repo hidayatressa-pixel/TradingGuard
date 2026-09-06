@@ -92,20 +92,20 @@ class PaperTradingService:
         effective_price=base_fill*(1.0-account.config.slippage_pct/100.0); self._close_position(timestamp=candle.timestamp,effective_price=effective_price,exit_signal_timestamp=candle.timestamp,exit_assessment="STOP_LOSS",exit_reason=PaperExitReason.STOP_LOSS); return True
 
     def process_candle(self,candle:Candle,strategy:StrategyResult,risk:RiskResult,stop_loss_price:float|None=None,execution_policy:RiskPolicy|None=None)->PaperAccount:
-        account=self.state(); self._validate_event(candle,strategy,risk); self._roll_risk_day(candle.timestamp); current_index=account.event_index; position_at_candle_start=account.open_position is not None
+        account=self.state(); self._validate_event(candle,strategy,risk); self._roll_risk_day(candle.timestamp); current_index=account.event_index; position_at_candle_start=account.open_position is not None; sized_entry_vetoed=False
         if not account.config.paper_trading_enabled: account.pending_entry=None
         if account.pending_entry is not None and account.pending_entry.execute_index==current_index:
             if account.pending_entry.quantity is not None:
-                self._execute_due_sized_entry(candle,strategy,account.pending_entry,execution_policy)
+                sized_entry_vetoed=not self._execute_due_sized_entry(candle,strategy,account.pending_entry,execution_policy)
             else:
                 self._execute_entry(candle,account.pending_entry)
         if account.pending_exit is not None and account.pending_exit.execute_index==current_index: self._execute_exit(candle,account.pending_exit)
         stopped=False
         if position_at_candle_start and account.open_position is not None: stopped=self._execute_stop_if_triggered(candle)
         if not stopped:
-            # V0.7 legacy scheduling is retained for compatibility. Operational V0.9 auto-BUY must use schedule_sized_entry,
-            # whose quantity-bearing pending entry is the only path that receives fresh next-open Risk Guard revalidation.
-            if account.config.paper_trading_enabled and account.open_position is None and account.pending_entry is None:
+            # V0.7 legacy scheduling is retained for compatibility. Operational V0.9 auto-BUY must use schedule_sized_entry.
+            # A sized-entry veto owns the current candle: it must not fall through and create a fresh legacy pending BUY.
+            if not sized_entry_vetoed and account.config.paper_trading_enabled and account.open_position is None and account.pending_entry is None:
                 if strategy.data_ready and strategy.assessment in {Assessment.BULLISH,Assessment.STRONG_BULLISH} and risk.decision==RiskDecision.ALLOW: account.pending_entry=PendingEntry(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=current_index+1,stop_loss_price=stop_loss_price)
             elif account.open_position is not None and account.pending_exit is None:
                 if strategy.data_ready and strategy.assessment in {Assessment.NEUTRAL,Assessment.BEARISH,Assessment.STRONG_BEARISH}: account.pending_exit=PendingExit(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=current_index+1)
