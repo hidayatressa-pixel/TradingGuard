@@ -1,75 +1,86 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { tradingGuardApi } from './client'
 import type { PaperAccount, PaperPerformanceSnapshot } from './types'
 
-export interface PaperReadOnlyState {
+export interface PaperAccountState {
   account: PaperAccount | null
   performance: PaperPerformanceSnapshot | null
   loading: boolean
+  mutating: boolean
   available: boolean
   message: string | null
+  start: () => Promise<void>
+  reset: () => Promise<void>
+  refresh: () => Promise<void>
 }
 
-const initialState: PaperReadOnlyState = {
-  account: null,
-  performance: null,
+const initialState = {
+  account: null as PaperAccount | null,
+  performance: null as PaperPerformanceSnapshot | null,
   loading: true,
+  mutating: false,
   available: false,
-  message: null,
+  message: null as string | null,
 }
 
 /**
- * Reads the process-local V0.7 paper account without mutating it.
+ * Controls the process-local PAPER virtual account only.
  *
- * This hook intentionally never starts, resets, or processes a paper session.
- * A missing session is an unavailable state, not a zero-valued account.
+ * Start/reset are account lifecycle actions. This hook never processes market
+ * events, manufactures RiskContext, or authorizes an entry. Operational paper
+ * trading remains fail-closed until the authoritative risk-sizing bridge exists.
  */
-export function usePaperReadOnly(): PaperReadOnlyState {
-  const [state, setState] = useState<PaperReadOnlyState>(initialState)
+export function usePaperReadOnly(): PaperAccountState {
+  const [state, setState] = useState(initialState)
 
-  useEffect(() => {
-    let mounted = true
-
-    async function load(): Promise<void> {
+  const load = useCallback(async (showLoading = true): Promise<void> => {
+    if (showLoading) setState(value => ({ ...value, loading: true, message: null }))
+    try {
+      const account = await tradingGuardApi.getPaperState()
+      let performance: PaperPerformanceSnapshot | null = null
+      let message: string | null = null
       try {
-        const account = await tradingGuardApi.getPaperState()
-        if (!mounted) return
-
-        // Performance belongs to an existing authoritative account. Keep its
-        // failure independent so account state can still be shown truthfully.
-        try {
-          const performance = await tradingGuardApi.getPaperPerformance()
-          if (!mounted) return
-          setState({ account, performance, loading: false, available: true, message: null })
-        } catch (cause: unknown) {
-          if (!mounted) return
-          setState({
-            account,
-            performance: null,
-            loading: false,
-            available: true,
-            message: cause instanceof Error ? cause.message : 'Paper performance is unavailable.',
-          })
-        }
+        performance = await tradingGuardApi.getPaperPerformance()
       } catch (cause: unknown) {
-        if (!mounted) return
-        setState({
-          account: null,
-          performance: null,
-          loading: false,
-          available: false,
-          message: cause instanceof Error ? cause.message : 'Paper session is not available.',
-        })
+        message = cause instanceof Error ? cause.message : 'Paper performance is unavailable.'
       }
-    }
-
-    void load()
-
-    return () => {
-      mounted = false
+      setState(value => ({ ...value, account, performance, loading: false, available: true, message }))
+    } catch (cause: unknown) {
+      setState(value => ({
+        ...value,
+        account: null,
+        performance: null,
+        loading: false,
+        available: false,
+        message: cause instanceof Error ? cause.message : 'Paper session is not available.',
+      }))
     }
   }, [])
 
-  return state
+  useEffect(() => { void load() }, [load])
+
+  const start = useCallback(async (): Promise<void> => {
+    setState(value => ({ ...value, mutating: true, message: null }))
+    try {
+      const account = await tradingGuardApi.startPaper({ config: { initial_capital: 10000.0 } })
+      const performance = await tradingGuardApi.getPaperPerformance()
+      setState(value => ({ ...value, account, performance, loading: false, mutating: false, available: true, message: null }))
+    } catch (cause: unknown) {
+      setState(value => ({ ...value, mutating: false, message: cause instanceof Error ? cause.message : 'Unable to start PAPER account.' }))
+    }
+  }, [])
+
+  const reset = useCallback(async (): Promise<void> => {
+    setState(value => ({ ...value, mutating: true, message: null }))
+    try {
+      const account = await tradingGuardApi.resetPaper()
+      const performance = account.active ? await tradingGuardApi.getPaperPerformance() : null
+      setState(value => ({ ...value, account, performance, loading: false, mutating: false, available: true, message: null }))
+    } catch (cause: unknown) {
+      setState(value => ({ ...value, mutating: false, message: cause instanceof Error ? cause.message : 'Unable to reset PAPER account.' }))
+    }
+  }, [])
+
+  return { ...state, start, reset, refresh: () => load(true) }
 }
