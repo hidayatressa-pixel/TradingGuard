@@ -12,6 +12,7 @@ from backend.app.market.data_provider import BinancePublicMarketDataProvider, Ma
 from backend.app.market.models import Candle
 from backend.app.market.validation import validate_candle_dataset
 from backend.app.paper.auto_loop import AutoPaperCycleResult, AutoPaperLoopService
+from backend.app.paper.manual import ManualGuardedTradeResult, ManualGuardedTradeService
 from backend.app.paper.models import PaperAccount, PaperPerformanceSnapshot, PaperTradingConfig
 from backend.app.paper.service import PaperTradingService
 from backend.app.risk.context import PaperRiskContextBuilder, RiskContextAvailability
@@ -37,7 +38,7 @@ class PaperProcessRequest(BaseModel):
 
 app=FastAPI(title='TradingGuard',version='0.9.0-dev')
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:5173','http://127.0.0.1:5173'],allow_credentials=False,allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Accept'])
-mock_provider=MockMarketDataProvider(); real_provider=BinancePublicMarketDataProvider(); indicator_service=IndicatorService(); strategy_service=StrategyService(); risk_service=RiskService(); risk_sizing_service=RiskSizingService(); risk_context_builder=PaperRiskContextBuilder(); backtest_service=BacktestService(); paper_service=PaperTradingService(); auto_paper_loop=AutoPaperLoopService(paper_service)
+mock_provider=MockMarketDataProvider(); real_provider=BinancePublicMarketDataProvider(); indicator_service=IndicatorService(); strategy_service=StrategyService(); risk_service=RiskService(); risk_sizing_service=RiskSizingService(); risk_context_builder=PaperRiskContextBuilder(); backtest_service=BacktestService(); paper_service=PaperTradingService(); auto_paper_loop=AutoPaperLoopService(paper_service); manual_trade_service=ManualGuardedTradeService(paper_service)
 
 def _provider(source:str)->MarketDataProvider:
     if source=='mock': return mock_provider
@@ -50,6 +51,15 @@ def _candles(source:str,symbol:str,timeframe:str,limit:int)->list[Candle]:
     errors=validate_candle_dataset(candles)
     if errors: raise HTTPException(status_code=502 if source!='mock' else 500,detail=errors)
     return candles
+
+def _authoritative_market(source:str,symbol:str,timeframe:str,limit:int=100):
+    candles=_candles(source,symbol,timeframe,limit)
+    if len(candles)<2: raise HTTPException(status_code=422,detail='At least one completed candle and one market observation are required.')
+    completed=candles[:-1]
+    strategies=strategy_service.build_results(indicator_service.build_snapshots(completed))
+    if not strategies: raise HTTPException(status_code=422,detail='Strategy is unavailable for completed candles.')
+    return candles,completed,strategies[-1]
+
 @app.get('/health')
 def health_check()->dict[str,str]: return {'status':'ok','service':'TradingGuard','message':'Application is running.'}
 @app.get('/market/candles',response_model=list[Candle])
@@ -92,13 +102,32 @@ def _parse_risk(payload:dict)->RiskResult:
 def start_paper(payload:dict|None=Body(default=None))->PaperAccount:
     try:r=PaperStartRequest.model_validate(payload or {});return paper_service.start(PaperTradingConfig.model_validate(r.config or {}))
     except (KeyError,ValueError,TypeError) as exc:raise HTTPException(status_code=400,detail=str(exc)) from exc
+
+@app.post('/paper/manual-buy',response_model=ManualGuardedTradeResult)
+def manual_paper_buy(symbol:str=Query(...,min_length=1),timeframe:str=Query(...,pattern=r'^(1m|5m|15m|1h|4h|1d)$'),source:str=Query('binance',pattern=r'^(mock|binance)$'),risk_budget_pct:float=Query(0.5,gt=0,le=1.0),max_allocation_pct:float=Query(20.0,gt=0,le=100))->ManualGuardedTradeResult:
+    """Interactive PAPER BUY: backend derives strategy/stop/sizing/risk; no client bypass and no pending loop."""
+    try:
+        candles,completed,strategy=_authoritative_market(source,symbol,timeframe)
+        return manual_trade_service.buy(completed_candles=completed,strategy=strategy,market_price=float(candles[-1].close),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
+    except HTTPException: raise
+    except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+@app.post('/paper/manual-sell',response_model=ManualGuardedTradeResult)
+def manual_paper_sell(source:str=Query('binance',pattern=r'^(mock|binance)$'))->ManualGuardedTradeResult:
+    """Close the active PAPER position immediately using authoritative market data."""
+    try:
+        account=paper_service.state(); position=account.open_position
+        if position is None: raise HTTPException(status_code=422,detail='No active paper position to SELL.')
+        candles,_,strategy=_authoritative_market(source,position.symbol,position.timeframe)
+        return manual_trade_service.sell(strategy=strategy,market_price=float(candles[-1].close))
+    except HTTPException: raise
+    except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
+
 @app.post('/paper/auto-cycle',response_model=AutoPaperCycleResult)
 def auto_paper_cycle(symbol:str=Query(...,min_length=1),timeframe:str=Query(...,pattern=r'^(1m|5m|15m|1h|4h|1d)$'),source:str=Query('binance',pattern=r'^(mock|binance)$'),limit:int=Query(100,ge=35,le=500),risk_budget_pct:float=Query(0.5,gt=0,le=1.0),max_allocation_pct:float=Query(20.0,gt=0,le=100))->AutoPaperCycleResult:
-    """Authoritative autonomous PAPER evaluation: client cannot provide strategy, price, stop, or policy."""
     try:
         account=paper_service.state()
-        if not account.active or not account.config.paper_trading_enabled:
-            raise HTTPException(status_code=422,detail='Paper trading is inactive; autonomous evaluation remains fail-closed.')
+        if not account.active or not account.config.paper_trading_enabled: raise HTTPException(status_code=422,detail='Paper trading is inactive; autonomous evaluation remains fail-closed.')
         return auto_paper_loop.cycle(_candles(source,symbol,timeframe,limit),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
     except HTTPException: raise
     except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
