@@ -68,10 +68,12 @@ def test_insufficient_cash_fails_closed_without_resizing()->None:
     service.process_candle(candle(0),strategy(0),risk(0,RiskDecision.BLOCK))
     assert service.state().open_position is None
     assert service.state().pending_entry is not None
-    # At T+1 the exact 100-unit proposal costs 10,100 including fee, so fail closed.
-    with pytest.raises(ValueError,match="silently resized"):
-        service.process_candle(candle(1),strategy(1),risk(1,RiskDecision.BLOCK))
+    # At T+1 exact quantity plus fee exceeds cash. Revalidation cancels the proposal fail-closed;
+    # it must neither raise into an execution retry loop nor silently resize the quantity.
+    service.process_candle(candle(1),strategy(1),risk(1,RiskDecision.BLOCK))
     assert service.state().open_position is None
+    assert service.state().pending_entry is None
+    assert service.state().cash==pytest.approx(10000.0)
 
 
 def test_sized_entry_keeps_next_event_timing()->None:
