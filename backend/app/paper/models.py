@@ -36,12 +36,12 @@ class PaperExitReason(str, Enum): STRATEGY="STRATEGY"; STOP_LOSS="STOP_LOSS"
 
 class PendingEntry(BaseModel):
     model_config=ConfigDict(strict=True)
-    action:PendingActionType=PendingActionType.ENTRY; signal_timestamp:datetime; symbol:str; timeframe:str; assessment:str; execute_index:int; stop_loss_price:float|None=None
+    action:PendingActionType=PendingActionType.ENTRY; signal_timestamp:datetime; symbol:str; timeframe:str; assessment:str; execute_index:int; stop_loss_price:float|None=None; quantity:float|None=None
 
-    @field_validator("stop_loss_price")
+    @field_validator("stop_loss_price", "quantity")
     @classmethod
-    def validate_stop(cls,value:float|None)->float|None:
-        if value is not None and (not math.isfinite(value) or value<=0): raise ValueError("stop_loss_price must be finite and positive.")
+    def validate_optional_positive_finite(cls,value:float|None)->float|None:
+        if value is not None and (not math.isfinite(value) or value<=0): raise ValueError("stop_loss_price and quantity must be finite and positive when supplied.")
         return value
 
 
