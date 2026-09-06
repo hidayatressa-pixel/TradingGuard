@@ -103,9 +103,10 @@ class PaperTradingService:
         stopped=False
         if position_at_candle_start and account.open_position is not None: stopped=self._execute_stop_if_triggered(candle)
         if not stopped:
-            # Legacy V0.7 scheduling remains for regression compatibility only. Operational V0.9 BUY must use schedule_sized_entry.
+            # V0.7 legacy scheduling is retained for compatibility. Operational V0.9 auto-BUY must use schedule_sized_entry,
+            # whose quantity-bearing pending entry is the only path that receives fresh next-open Risk Guard revalidation.
             if account.config.paper_trading_enabled and account.open_position is None and account.pending_entry is None:
-                if strategy.data_ready and strategy.assessment in {Assessment.BULLISH,Assessment.STRONG_BULLISH} and risk.decision==RiskDecision.ALLOW and stop_loss_price is not None: account.pending_entry=PendingEntry(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=current_index+1,stop_loss_price=stop_loss_price)
+                if strategy.data_ready and strategy.assessment in {Assessment.BULLISH,Assessment.STRONG_BULLISH} and risk.decision==RiskDecision.ALLOW: account.pending_entry=PendingEntry(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=current_index+1,stop_loss_price=stop_loss_price)
             elif account.open_position is not None and account.pending_exit is None:
                 if strategy.data_ready and strategy.assessment in {Assessment.NEUTRAL,Assessment.BEARISH,Assessment.STRONG_BEARISH}: account.pending_exit=PendingExit(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=current_index+1)
         account.last_event_timestamp=candle.timestamp; account.event_index+=1; return account
