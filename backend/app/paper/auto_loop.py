@@ -19,6 +19,9 @@ class AutoPaperCycleResult(BaseModel):
     authorization: AutoPaperEntryResult | None = None
     account: PaperAccount
     reason: str
+    mark_price: float | None = None
+    unrealized_pnl: float | None = None
+    unrealized_return_pct: float | None = None
 
 
 class AutoPaperLoopService:
@@ -43,13 +46,34 @@ class AutoPaperLoopService:
             return account.pending_exit.symbol, account.pending_exit.timeframe
         return None
 
+    @staticmethod
+    def _mark_to_market(account: PaperAccount, market_candle: Candle) -> tuple[float | None, float | None, float | None]:
+        position = account.open_position
+        if position is None or (position.symbol, position.timeframe) != (market_candle.symbol, market_candle.timeframe):
+            return None, None, None
+        mark = float(market_candle.close)
+        gross = (mark - position.entry_price) * position.quantity
+        estimated_exit_fee = mark * position.quantity * (account.config.transaction_cost_pct / 100.0)
+        net = gross - position.entry_transaction_cost - estimated_exit_fee
+        committed = position.entry_notional + position.entry_transaction_cost
+        return mark, net, (net / committed) * 100.0 if committed > 0 else None
+
+    def _result(self, *, strategy: StrategyResult, entry: AutoPaperEntryResult | None,
+                account: PaperAccount, reason: str, market_candle: Candle) -> AutoPaperCycleResult:
+        mark, pnl, return_pct = self._mark_to_market(account, market_candle)
+        return AutoPaperCycleResult(
+            strategy=strategy, entry=entry, authorization=self.last_authorization,
+            account=account, reason=reason, mark_price=mark,
+            unrealized_pnl=pnl, unrealized_return_pct=return_pct,
+        )
+
     def _duplicate_reason(self, account: PaperAccount) -> str:
+        if account.pending_exit is not None:
+            return "EXIT signal is armed; waiting only for the next authoritative candle event to execute the PAPER exit."
         if account.open_position is not None:
             return "PAPER position remains active; this completed candle was already monitored. Waiting for the next completed candle for stop/exit monitoring."
         if account.pending_entry is not None:
             return "Sized PAPER BUY remains pending; this completed candle was already processed. Waiting for the next completed candle for execution revalidation."
-        if account.pending_exit is not None:
-            return "PAPER exit remains pending; this completed candle was already processed. Waiting for the next completed candle for exit execution."
         return "No new completed candle is available; the latest authoritative candle was already processed."
 
     def cycle(self, candles: list[Candle], *, risk_budget_pct: float = 0.5,
@@ -59,6 +83,7 @@ class AutoPaperLoopService:
             raise ValueError("Auto Paper cycle requires at least one completed candle plus the current market candle.")
 
         completed = candles[:-1]
+        market_candle = candles[-1]
         results = self.strategy.build_results(self.indicators.build_snapshots(completed))
         if not results:
             raise ValueError("Strategy could not be derived from completed authoritative candle data.")
@@ -83,10 +108,8 @@ class AutoPaperLoopService:
         account = self.paper_service.state()
 
         if account.last_event_timestamp is not None and candle.timestamp <= account.last_event_timestamp:
-            return AutoPaperCycleResult(
-                strategy=current, entry=None, authorization=self.last_authorization,
-                account=account, reason=self._duplicate_reason(account),
-            )
+            return self._result(strategy=current, entry=None, account=account,
+                                reason=self._duplicate_reason(account), market_candle=market_candle)
 
         entry = None
         flat = account.open_position is None and account.pending_entry is None and account.pending_exit is None
@@ -102,21 +125,17 @@ class AutoPaperLoopService:
         account = self.paper_service.state()
 
         if entry is not None:
-            return AutoPaperCycleResult(
-                strategy=current, entry=entry, authorization=self.last_authorization,
-                account=account, reason=entry.reason,
-            )
-        if account.open_position is not None:
-            reason = "PAPER position is active; stop/exit monitoring consumed the latest completed candle."
+            return self._result(strategy=current, entry=entry, account=account,
+                                reason=entry.reason, market_candle=market_candle)
+        if account.pending_exit is not None:
+            reason = f"EXIT ARMED: completed strategy is {current.assessment.value}; PAPER exit is scheduled for the next authoritative candle event."
+        elif account.open_position is not None:
+            reason = f"POSITION MONITORING: completed strategy is {current.assessment.value}; Stop Loss and exit rules remain active."
         elif account.pending_entry is not None:
             reason = "Sized PAPER BUY is pending next-completed-candle execution revalidation."
-        elif account.pending_exit is not None:
-            reason = "PAPER exit is pending execution on the next completed candle event."
         elif eligible:
             reason = "Eligible bullish setup reached the gate, but no entry is authorized in the current account state."
         else:
             reason = "Strategy is not an eligible bullish entry setup; no PAPER entry was proposed."
-        return AutoPaperCycleResult(
-            strategy=current, entry=None, authorization=self.last_authorization,
-            account=account, reason=reason,
-        )
+        return self._result(strategy=current, entry=None, account=account,
+                            reason=reason, market_candle=market_candle)
