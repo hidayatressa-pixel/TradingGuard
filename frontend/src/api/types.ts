@@ -15,7 +15,7 @@ export interface RiskSizingResult{equity:number;reference_entry_price:number;sto
 export interface ProspectiveRiskGateResult{sizing:RiskSizingResult;context_availability:{available:boolean;context:RiskContext|null;missing_facts:string[];reason:string};risk:RiskResult|null;execution_permission_established:boolean;reason:string}
 export interface AutoStopLossResult{valid:boolean;stop_loss_price:number|null;method:string;atr:number|null;structure_low:number|null;stop_distance_pct:number|null;reason:string}
 export interface AutoPaperEntryResult{scheduled:boolean;execution_permission_established:boolean;gate:ProspectiveRiskGateResult|null;auto_stop:AutoStopLossResult|null;reason:string}
-export interface AutoPaperCycleResult{strategy:StrategyResult;entry:AutoPaperEntryResult|null;account:PaperAccount;reason:string}
+export interface AutoPaperCycleResult{strategy:StrategyResult;entry:AutoPaperEntryResult|null;authorization:AutoPaperEntryResult|null;account:PaperAccount;reason:string}
 export interface PaperTradingConfig{initial_capital?:number;position_size_pct?:number;transaction_cost_pct?:number;slippage_pct?:number;paper_trading_enabled?:boolean}
 export type PendingActionType='ENTRY'|'EXIT'
 export interface PendingAction{action?:PendingActionType;signal_timestamp:Timestamp;symbol:string;timeframe:string;assessment:string;execute_index:number;stop_loss_price?:number|null;quantity?:number|null}
