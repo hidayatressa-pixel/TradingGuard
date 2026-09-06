@@ -21,7 +21,7 @@ class AutoPaperCycleResult(BaseModel):
 
 
 class AutoPaperLoopService:
-    """One authoritative PAPER cycle. Repeated calls are idempotent for the same candle."""
+    """One authoritative PAPER cycle. Decisions use completed candles only."""
     def __init__(self, paper_service: PaperTradingService) -> None:
         self.paper_service = paper_service
         self.indicators = IndicatorService()
@@ -31,36 +31,40 @@ class AutoPaperLoopService:
     def cycle(self, candles: list[Candle], *, risk_budget_pct: float = 0.5,
               max_allocation_pct: float | None = 20.0,
               policy: RiskPolicy | None = None) -> AutoPaperCycleResult:
-        if not candles:
-            raise ValueError("Auto Paper cycle requires authoritative candle data.")
-        results = self.strategy.build_results(self.indicators.build_snapshots(candles))
+        if len(candles) < 2:
+            raise ValueError("Auto Paper cycle requires at least one completed candle plus the current market candle.")
+
+        # Public kline feeds include the currently forming candle. Never make an autonomous
+        # decision from that mutable candle: the completed prefix is the authoritative event set.
+        completed = candles[:-1]
+        results = self.strategy.build_results(self.indicators.build_snapshots(completed))
         if not results:
-            raise ValueError("Strategy could not be derived from authoritative candle data.")
+            raise ValueError("Strategy could not be derived from completed authoritative candle data.")
         current = results[-1]
-        candle = candles[-1]
+        candle = completed[-1]
         account = self.paper_service.state()
         if not account.active or not account.config.paper_trading_enabled:
             raise ValueError("Paper trading is inactive; autonomous cycle remains fail-closed.")
 
-        # Establish the daily risk baseline before the prospective Risk Guard evaluation.
-        # Previously risk_day stayed None after Paper start, making every first auto entry fail closed forever.
+        # Paper start previously left risk_day=None. That made the first prospective RiskContext
+        # incomplete and could keep every autonomous BUY blocked before Risk Guard had a fair gate.
         self.paper_service.prepare_risk_day(candle.timestamp)
         account = self.paper_service.state()
 
         if account.last_event_timestamp is not None and candle.timestamp <= account.last_event_timestamp:
             return AutoPaperCycleResult(strategy=current, entry=None, account=account,
-                                        reason="Candle already processed; waiting for a newer authoritative candle.")
+                                        reason="Completed candle already processed; waiting for the next completed candle.")
 
         entry = None
         if account.open_position is None and account.pending_entry is None and account.pending_exit is None:
             if current.data_ready and current.assessment in {Assessment.BULLISH, Assessment.STRONG_BULLISH}:
                 entry = self.orchestrator.evaluate_and_schedule_auto(
-                    strategy=current, candles=candles, risk_budget_pct=risk_budget_pct,
+                    strategy=current, candles=completed, risk_budget_pct=risk_budget_pct,
                     max_allocation_pct=max_allocation_pct, policy=policy,
                 )
 
-        # Consume the signal candle after scheduling. This advances event_index once, so a sized
-        # pending entry is due exactly on the next new candle and receives fresh execution revalidation.
+        # Consume the signal candle after scheduling. event_index advances once here, making the
+        # sized BUY due on the next completed candle, where execution risk is freshly revalidated.
         self.paper_service.process_auto_candle(candle, current, execution_policy=policy)
         account = self.paper_service.state()
 
@@ -69,7 +73,7 @@ class AutoPaperLoopService:
         if account.open_position is not None:
             reason = "PAPER position is active; autonomous stop/exit monitoring continues."
         elif account.pending_entry is not None:
-            reason = "Sized PAPER BUY is pending next-candle execution revalidation."
+            reason = "Sized PAPER BUY is pending next-completed-candle execution revalidation."
         elif current.data_ready and current.assessment in {Assessment.BULLISH, Assessment.STRONG_BULLISH}:
             reason = "Bullish setup was evaluated but no new entry is currently schedulable."
         else:
