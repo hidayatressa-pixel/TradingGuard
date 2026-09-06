@@ -34,8 +34,7 @@ const initialState = {
 export function usePaperReadOnly(): PaperAccountState {
   const [state, setState] = useState(initialState)
 
-  const load = useCallback(async (showLoading = true): Promise<void> => {
-    if (showLoading) setState(value => ({ ...value, loading: true, message: null }))
+  const load = useCallback(async (): Promise<void> => {
     try {
       const account = await tradingGuardApi.getPaperState()
       let performance: PaperPerformanceSnapshot | null = null
@@ -82,5 +81,10 @@ export function usePaperReadOnly(): PaperAccountState {
     }
   }, [])
 
-  return { ...state, start, reset, refresh: () => load(true) }
+  const refresh = useCallback(async (): Promise<void> => {
+    setState(value => ({ ...value, loading: true, message: null }))
+    await load()
+  }, [load])
+
+  return { ...state, start, reset, refresh }
 }
