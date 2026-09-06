@@ -27,11 +27,6 @@ def started(**kwargs)->PaperTradingService:
     service=PaperTradingService(); service.start(PaperTradingConfig(**kwargs)); return service
 
 
-def execute_due_entry(service:PaperTradingService)->None:
-    service.process_candle(candle(0),strategy(0,Assessment.NEUTRAL) if False else strategy(0),risk(0,RiskDecision.BLOCK))
-    service.process_candle(candle(1),strategy(1),risk(1,RiskDecision.BLOCK))
-
-
 def test_sized_entry_executes_exact_authoritative_quantity()->None:
     service=started(position_size_pct=1.0,transaction_cost_pct=0.0,slippage_pct=0.0)
     service.schedule_sized_entry(strategy=strategy(),risk=risk(),quantity=12.5,stop_loss_price=95.0,expected_equity=10000.0)
@@ -69,8 +64,13 @@ def test_non_allow_cannot_schedule_sized_entry(decision:RiskDecision)->None:
 def test_insufficient_cash_fails_closed_without_resizing()->None:
     service=started(transaction_cost_pct=1.0,slippage_pct=0.0)
     service.schedule_sized_entry(strategy=strategy(),risk=risk(),quantity=100.0,stop_loss_price=95.0,expected_equity=10000.0)
+    # Authorization at T schedules execution for T+1 OPEN. T must not execute.
+    service.process_candle(candle(0),strategy(0),risk(0,RiskDecision.BLOCK))
+    assert service.state().open_position is None
+    assert service.state().pending_entry is not None
+    # At T+1 the exact 100-unit proposal costs 10,100 including fee, so fail closed.
     with pytest.raises(ValueError,match="silently resized"):
-        service.process_candle(candle(0),strategy(0),risk(0,RiskDecision.BLOCK))
+        service.process_candle(candle(1),strategy(1),risk(1,RiskDecision.BLOCK))
     assert service.state().open_position is None
 
 
