@@ -1,20 +1,32 @@
-import { useEffect, useState } from 'react'
-import { Activity, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react'
-import { tradingGuardApi, type MarketSource } from './api/client'
+import { useEffect, useMemo, useState } from 'react'
+import { Activity, BarChart3, BookOpen, Database, RefreshCw, Settings, ShieldAlert, ShieldCheck, TestTube2, WalletCards } from 'lucide-react'
+import { API_BASE_URL, tradingGuardApi, type MarketSource } from './api/client'
+import { useBacktest } from './api/useBacktest'
+import { usePaperReadOnly } from './api/usePaperReadOnly'
 import type { Candle, IndicatorSnapshot, StrategyResult } from './api/types'
 import './App.css'
 
+type View = 'Dashboard' | 'Market' | 'Strategy' | 'Risk Guard' | 'Paper Trading' | 'Backtest' | 'Trade Journal' | 'Settings'
 type Selection = { source: MarketSource; symbol: string; timeframe: string }
-type Data = { candle?: Candle; indicator?: IndicatorSnapshot; strategy?: StrategyResult }
+type Data = { candles: Candle[]; indicators: IndicatorSnapshot[]; strategies: StrategyResult[] }
 const NA = 'N/A'
 const number = (value: number | null | undefined, digits = 2) => value == null ? NA : value.toFixed(digits)
+const money = (value: number | null | undefined) => value == null ? NA : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+const nav: Array<{ name: View; icon: typeof Activity }> = [
+  { name: 'Dashboard', icon: Activity }, { name: 'Market', icon: BarChart3 }, { name: 'Strategy', icon: Database },
+  { name: 'Risk Guard', icon: ShieldAlert }, { name: 'Paper Trading', icon: WalletCards }, { name: 'Backtest', icon: TestTube2 },
+  { name: 'Trade Journal', icon: BookOpen }, { name: 'Settings', icon: Settings },
+]
 
 function App() {
+  const [view, setView] = useState<View>('Dashboard')
   const [selection, setSelection] = useState<Selection>({ source: 'binance', symbol: 'BTCUSDT', timeframe: '1h' })
   const [refreshKey, setRefreshKey] = useState(0)
-  const [data, setData] = useState<Data>({})
+  const [data, setData] = useState<Data>({ candles: [], indicators: [], strategies: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const paper = usePaperReadOnly()
+  const backtest = useBacktest()
 
   useEffect(() => {
     let mounted = true
@@ -23,54 +35,58 @@ function App() {
       tradingGuardApi.getMarketCandles(selection.symbol, selection.timeframe, 100, selection.source),
       tradingGuardApi.getIndicators(selection.symbol, selection.timeframe, 100, selection.source),
       tradingGuardApi.getStrategy(selection.symbol, selection.timeframe, 100, selection.source),
-    ])
-      .then(([candles, indicators, strategies]) => {
-        if (!mounted) return
-        setData({ candle: candles.at(-1), indicator: indicators.at(-1), strategy: strategies.at(-1) })
-        setError(null)
-      })
-      .catch((cause: unknown) => {
-        if (!mounted) return
-        setData({})
-        setError(cause instanceof Error ? cause.message : 'Unable to load selected market source.')
-      })
-      .finally(() => { if (mounted) setLoading(false) })
+    ]).then(([candles, indicators, strategies]) => {
+      if (!mounted) return
+      setData({ candles, indicators, strategies }); setError(null)
+    }).catch((cause: unknown) => {
+      if (!mounted) return
+      setData({ candles: [], indicators: [], strategies: [] })
+      setError(cause instanceof Error ? cause.message : 'Unable to load selected market source.')
+    }).finally(() => { if (mounted) setLoading(false) })
     return () => { mounted = false }
   }, [selection, refreshKey])
 
+  const candle = data.candles.at(-1)
+  const indicator = data.indicators.at(-1)
+  const strategy = data.strategies.at(-1)
   const real = selection.source === 'binance'
-  return <div className="app-shell min-h-screen text-slate-200">
-    <aside className="sidebar fixed inset-y-0 left-0 w-[238px] px-5 py-6">
-      <div className="mb-8 flex items-center gap-3"><div className="grid size-9 place-items-center rounded bg-sky-500/15 text-sky-300"><ShieldCheck size={20}/></div><div><div className="font-bold text-white">TradingGuard</div><div className="mono text-[10px] text-slate-500">CONTROL CENTER · v0.8</div></div></div>
-      <div className="mono mb-3 text-[9px] uppercase tracking-[.2em] text-slate-600">Operations</div>
-      {['Dashboard','Market','Strategy','Risk Guard','Paper Trading','Backtest','Trade Journal','Settings'].map((item, index) => <div key={item} className={`nav-item mb-1 rounded px-3 py-2.5 text-xs ${index === 0 ? 'active' : ''}`}>{item}</div>)}
-      <div className="panel-soft absolute bottom-5 left-4 right-4 rounded p-3 text-[10px] text-slate-500">Backend-authoritative read-only market observation. No broker execution.</div>
-    </aside>
+  const recentCandles = useMemo(() => data.candles.slice(-12).reverse(), [data.candles])
 
-    <main className="main-area ml-[238px] min-h-screen px-8 py-6">
-      <header className="mb-6 border-b border-slate-800 pb-5">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-4"><div><div className="mono text-[10px] uppercase tracking-[.18em] text-slate-500">Risk control center</div><h1 className="text-2xl font-bold text-white">Real Market Dashboard</h1></div><div className={`rounded border px-3 py-2 mono text-[10px] ${real ? 'border-sky-500/30 bg-sky-500/10 text-sky-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}>● {real ? 'REAL PUBLIC DATA · BINANCE' : 'MOCK DATA'}</div></div>
-        <div className="panel-soft flex flex-wrap items-end gap-3 rounded p-4">
-          <label className="text-xs"><span className="mono mb-1 block text-[9px] text-slate-500">SOURCE</span><select value={selection.source} onChange={e => setSelection(v => ({...v, source: e.target.value as MarketSource}))} className="rounded border border-slate-700 bg-slate-900 px-3 py-2"><option value="binance">REAL · Binance Public</option><option value="mock">MOCK · Deterministic</option></select></label>
-          <label className="text-xs"><span className="mono mb-1 block text-[9px] text-slate-500">SYMBOL</span><select value={selection.symbol} onChange={e => setSelection(v => ({...v, symbol: e.target.value}))} className="rounded border border-slate-700 bg-slate-900 px-3 py-2"><option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option></select></label>
-          <label className="text-xs"><span className="mono mb-1 block text-[9px] text-slate-500">TIMEFRAME</span><select value={selection.timeframe} onChange={e => setSelection(v => ({...v, timeframe: e.target.value}))} className="rounded border border-slate-700 bg-slate-900 px-3 py-2">{['1m','5m','15m','1h','4h','1d'].map(tf => <option key={tf}>{tf}</option>)}</select></label>
-          <button disabled={loading} onClick={() => setRefreshKey(v => v + 1)} className="flex items-center gap-2 rounded border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-300 disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>{loading ? 'Loading…' : 'Refresh'}</button>
-        </div>
-      </header>
-
-      {error && <div className="mb-5 rounded border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200">Selected source unavailable: {error}. No silent fallback to mock data.</div>}
-
-      <section className="mb-5 grid gap-4 md:grid-cols-3">
-        <div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">LATEST MARKET PRICE</div><div className="mt-3 text-3xl font-bold text-white">{data.candle ? `$${data.candle.close.toLocaleString()}` : NA}</div><div className="mt-2 text-xs text-slate-500">{data.candle?.symbol ?? selection.symbol} · {data.candle?.timeframe ?? selection.timeframe}</div><div className="mt-1 mono text-[9px] text-slate-600">{data.candle ? new Date(data.candle.timestamp).toLocaleString() : NA}</div></div>
-        <div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">MARKET CONDITION · STRATEGY ENGINE</div><div className="mt-3 text-2xl font-bold text-sky-300">{data.strategy?.assessment?.replace(/_/g, ' ') ?? NA}</div><div className="mt-2 text-xs text-slate-500">Score {data.strategy?.score ?? NA} · Normalized {data.strategy?.normalized_score ?? NA}%</div><div className="mt-4 text-[10px] text-slate-500">Market condition ≠ execution permission.</div></div>
-        <div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">EXECUTION PERMISSION · RISK GUARD</div><div className="mt-3 flex items-center gap-2 text-xl font-bold text-slate-500"><ShieldAlert size={20}/>UNAVAILABLE</div><div className="mt-3 text-xs leading-relaxed text-slate-500">Authoritative RiskContext is incomplete. Entry remains fail-closed.</div></div>
-      </section>
-
-      <section className="panel mb-5 rounded-lg p-5"><div className="mb-5 flex items-center justify-between"><div><div className="mono text-[9px] text-slate-500">TECHNICAL ENGINE</div><h2 className="mt-1 font-semibold text-white">EMA · RSI · MACD</h2></div><Activity size={18} className="text-sky-400"/></div><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">{[['EMA FAST',data.indicator?.ema_fast],['EMA SLOW',data.indicator?.ema_slow],['RSI',data.indicator?.rsi],['MACD',data.indicator?.macd],['SIGNAL',data.indicator?.macd_signal],['HISTOGRAM',data.indicator?.macd_histogram]].map(([name,value]) => <div className="panel-soft rounded p-3" key={String(name)}><div className="mono text-[9px] text-slate-600">{name}</div><div className="mt-2 font-semibold text-slate-200">{number(value as number | null | undefined, 4)}</div></div>)}</div></section>
-
-      <section className="grid gap-4 lg:grid-cols-2"><div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">STRATEGY EVIDENCE</div><div className="mt-4 space-y-3">{data.strategy?.evidence?.length ? data.strategy.evidence.map((item, i) => <div className="panel-soft rounded p-3 text-xs" key={`${item.indicator}-${i}`}><div className="flex justify-between"><span className="font-semibold text-slate-300">{item.indicator}</span><span className="mono text-sky-400">{item.contribution > 0 ? '+' : ''}{item.contribution}</span></div><div className="mt-1 text-slate-500">{item.description}</div></div>) : <div className="text-xs text-slate-500">{loading ? 'Loading backend strategy…' : NA}</div>}</div></div><div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">SAFETY BOUNDARY</div><div className="mt-4 space-y-3 text-xs text-slate-400"><p>Real market data is observation input only.</p><p>Frontend does not calculate strategy, risk, accounting, or trade permission.</p><p>Paper Trading is not automatically started or processed.</p><p>No API key, broker credential, or live order execution is used.</p></div></div></section>
-      <footer className="mt-6 border-t border-slate-800 py-5 mono text-[9px] text-slate-600">SOURCE: {real ? 'BINANCE PUBLIC REST MARKET DATA' : 'TRADINGGUARD DETERMINISTIC MOCK'} · READ ONLY · NO BROKER EXECUTION</footer>
-    </main>
+  const controls = <div className="panel-soft flex flex-wrap items-end gap-3 rounded p-4">
+    <label className="text-xs"><span className="mono mb-1 block text-[9px] text-slate-500">SOURCE</span><select value={selection.source} onChange={e => setSelection(v => ({...v, source: e.target.value as MarketSource}))} className="rounded border border-slate-700 bg-slate-900 px-3 py-2"><option value="binance">REAL · Binance Public</option><option value="mock">MOCK · Deterministic</option></select></label>
+    <label className="text-xs"><span className="mono mb-1 block text-[9px] text-slate-500">SYMBOL</span><select value={selection.symbol} onChange={e => setSelection(v => ({...v, symbol: e.target.value}))} className="rounded border border-slate-700 bg-slate-900 px-3 py-2"><option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option></select></label>
+    <label className="text-xs"><span className="mono mb-1 block text-[9px] text-slate-500">TIMEFRAME</span><select value={selection.timeframe} onChange={e => setSelection(v => ({...v, timeframe: e.target.value}))} className="rounded border border-slate-700 bg-slate-900 px-3 py-2">{['1m','5m','15m','1h','4h','1d'].map(tf => <option key={tf}>{tf}</option>)}</select></label>
+    <button disabled={loading} onClick={() => setRefreshKey(v => v + 1)} className="flex items-center gap-2 rounded border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-300 disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>{loading ? 'Loading…' : 'Refresh'}</button>
   </div>
+
+  const strategyEvidence = <div className="space-y-3">{strategy?.evidence?.length ? strategy.evidence.map((item, i) => <div className="panel-soft rounded p-3 text-xs" key={`${item.indicator}-${i}`}><div className="flex justify-between"><span className="font-semibold text-slate-300">{item.indicator}</span><span className="mono text-sky-400">{item.contribution > 0 ? '+' : ''}{item.contribution}</span></div><div className="mt-1 text-slate-500">{item.description}</div></div>) : <div className="text-xs text-slate-500">{loading ? 'Loading backend strategy…' : NA}</div>}</div>
+
+  function Dashboard() { return <>
+    <section className="mb-5 grid gap-4 md:grid-cols-3">
+      <div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">LATEST MARKET PRICE</div><div className="mt-3 text-3xl font-bold text-white">{money(candle?.close)}</div><div className="mt-2 text-xs text-slate-500">{candle?.symbol ?? selection.symbol} · {candle?.timeframe ?? selection.timeframe}</div><div className="mt-1 mono text-[9px] text-slate-600">{candle ? new Date(candle.timestamp).toLocaleString() : NA}</div></div>
+      <div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">MARKET CONDITION · STRATEGY ENGINE</div><div className="mt-3 text-2xl font-bold text-sky-300">{strategy?.assessment?.replace(/_/g, ' ') ?? NA}</div><div className="mt-2 text-xs text-slate-500">Score {strategy?.score ?? NA} · Normalized {strategy?.normalized_score ?? NA}%</div><div className="mt-4 text-[10px] text-slate-500">Market condition ≠ execution permission.</div></div>
+      <div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">EXECUTION PERMISSION · RISK GUARD</div><div className="mt-3 flex items-center gap-2 text-xl font-bold text-slate-500"><ShieldAlert size={20}/>UNAVAILABLE</div><div className="mt-3 text-xs leading-relaxed text-slate-500">Authoritative RiskContext is incomplete. Entry remains fail-closed.</div></div>
+    </section>
+    <section className="panel mb-5 rounded-lg p-5"><div className="mb-5 flex items-center justify-between"><div><div className="mono text-[9px] text-slate-500">TECHNICAL ENGINE</div><h2 className="mt-1 font-semibold text-white">EMA · RSI · MACD</h2></div><Activity size={18} className="text-sky-400"/></div><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">{[['EMA FAST',indicator?.ema_fast],['EMA SLOW',indicator?.ema_slow],['RSI',indicator?.rsi],['MACD',indicator?.macd],['SIGNAL',indicator?.macd_signal],['HISTOGRAM',indicator?.macd_histogram]].map(([name,value]) => <div className="panel-soft rounded p-3" key={String(name)}><div className="mono text-[9px] text-slate-600">{name}</div><div className="mt-2 font-semibold text-slate-200">{number(value as number | null | undefined, 4)}</div></div>)}</div></section>
+    <section className="grid gap-4 lg:grid-cols-2"><div className="panel rounded-lg p-5"><div className="mono mb-4 text-[9px] text-slate-500">STRATEGY EVIDENCE</div>{strategyEvidence}</div><div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">SAFETY BOUNDARY</div><div className="mt-4 space-y-3 text-xs text-slate-400"><p>Real market data is observation input only.</p><p>Frontend does not calculate strategy, risk, accounting, or trade permission.</p><p>Paper Trading is not automatically started or processed.</p><p>No API key, broker credential, or live order execution is used.</p></div></div></section>
+  </> }
+
+  function Market() { return <div className="panel rounded-lg p-5"><div className="mb-4"><div className="mono text-[9px] text-slate-500">BACKEND MARKET FEED</div><h2 className="text-lg font-semibold text-white">Recent OHLCV · {selection.symbol}</h2></div><div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead className="mono text-[9px] text-slate-500"><tr>{['TIME','OPEN','HIGH','LOW','CLOSE','VOLUME'].map(x => <th className="px-3 py-3" key={x}>{x}</th>)}</tr></thead><tbody>{recentCandles.map(x => <tr className="table-row border-t border-slate-800" key={x.timestamp}><td className="px-3 py-3 text-slate-500">{new Date(x.timestamp).toLocaleString()}</td><td className="px-3 py-3">{number(x.open)}</td><td className="px-3 py-3">{number(x.high)}</td><td className="px-3 py-3">{number(x.low)}</td><td className="px-3 py-3 font-semibold text-white">{number(x.close)}</td><td className="px-3 py-3">{number(x.volume,4)}</td></tr>)}</tbody></table></div></div> }
+
+  function Strategy() { return <div className="grid gap-4 lg:grid-cols-2"><div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">BACKEND STRATEGY RESULT</div><div className="mt-4 text-3xl font-bold text-sky-300">{strategy?.assessment?.replace(/_/g,' ') ?? NA}</div><div className="mt-3 text-sm text-slate-400">Score {strategy?.score ?? NA} / 5 · Normalized {strategy?.normalized_score ?? NA}% · Data ready: {strategy ? String(strategy.data_ready) : NA}</div><div className="mt-5 rounded border border-slate-800 p-3 text-xs text-slate-500">This is market-condition scoring, not a buy/sell order and not execution permission.</div></div><div className="panel rounded-lg p-5"><div className="mono mb-4 text-[9px] text-slate-500">EVIDENCE</div>{strategyEvidence}</div></div> }
+
+  function RiskGuard() { return <div className="panel rounded-lg p-6"><div className="mono text-[9px] text-slate-500">AUTHORITATIVE RISK GATE</div><div className="mt-4 flex items-center gap-3 text-2xl font-bold text-slate-500"><ShieldAlert/>UNAVAILABLE</div><p className="mt-4 max-w-3xl text-sm leading-6 text-slate-400">V0.7 does not provide every fact required by RiskContext, including authoritative risk-per-trade. TradingGuard therefore refuses to fabricate zero-risk values or reinterpret paper allocation as risk. Prospective entry remains fail-closed.</p><div className="mt-5 panel-soft rounded p-4 text-xs text-slate-500">Market condition: <span className="text-sky-300">{strategy?.assessment?.replace(/_/g,' ') ?? NA}</span> · Execution permission: <span className="font-semibold text-slate-400">UNAVAILABLE</span></div></div> }
+
+  function PaperTrading() { const a = paper.account; const p = paper.performance; return <div className="grid gap-4 lg:grid-cols-2"><div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">PAPER ACCOUNT · READ ONLY</div><div className="mt-4 text-2xl font-bold text-white">{paper.loading ? 'LOADING…' : paper.available ? 'AVAILABLE' : 'NOT STARTED'}</div><div className="mt-5 grid grid-cols-2 gap-3 text-xs"><div className="panel-soft rounded p-3"><span className="text-slate-500">Cash</span><div className="mt-1 font-semibold">{money(a?.cash)}</div></div><div className="panel-soft rounded p-3"><span className="text-slate-500">Realized equity</span><div className="mt-1 font-semibold">{money(a?.realized_equity)}</div></div><div className="panel-soft rounded p-3"><span className="text-slate-500">Closed trades</span><div className="mt-1 font-semibold">{p?.total_closed_trades ?? NA}</div></div><div className="panel-soft rounded p-3"><span className="text-slate-500">Win rate</span><div className="mt-1 font-semibold">{p ? `${number(p.win_rate_pct)}%` : NA}</div></div></div>{paper.message && <div className="mt-4 text-xs text-amber-300/70">{paper.message}</div>}</div><div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">POSITION STATE</div><div className="mt-4 text-lg font-semibold text-white">{a?.open_position ? `${a.open_position.symbol} OPEN` : 'NO OPEN POSITION'}</div><div className="mt-4 text-xs leading-6 text-slate-500">Dashboard is read-only. It does not start, reset, or process a paper session automatically. Risk permission remains authoritative.</div></div></div> }
+
+  function Backtest() { return <div className="panel rounded-lg p-5"><div className="flex flex-wrap items-center justify-between gap-4"><div><div className="mono text-[9px] text-slate-500">V0.6 BACKTEST ENGINE</div><h2 className="mt-1 text-lg font-semibold text-white">Explicit backend evaluation</h2></div><button disabled={backtest.running || loading || !data.candles.length} onClick={() => void backtest.run(data.candles, data.strategies)} className="rounded border border-sky-500/30 bg-sky-500/10 px-4 py-2 text-xs text-sky-300 disabled:opacity-40">{backtest.running ? 'Running…' : 'Run Backtest on Loaded Data'}</button></div><p className="mt-4 text-xs text-slate-500">Uses the currently loaded backend candle and strategy sequences. React validates alignment only; calculations remain in FastAPI.</p>{backtest.error && <div className="mt-4 rounded border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{backtest.error}</div>}{backtest.result ? <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[['Final equity',money(backtest.result.final_equity)],['Net profit',money(backtest.result.net_profit)],['Return',`${number(backtest.result.total_return_pct)}%`],['Trades',String(backtest.result.total_trades)],['Win rate',`${number(backtest.result.win_rate_pct)}%`],['Profit factor',number(backtest.result.profit_factor)],['Max drawdown',`${number(backtest.result.max_drawdown_pct)}%`],['Expected value',money(backtest.result.expected_value)]].map(([k,v]) => <div className="panel-soft rounded p-3" key={k}><div className="mono text-[9px] text-slate-500">{k}</div><div className="mt-2 font-semibold text-white">{v}</div></div>)}</div> : <div className="mt-5 text-xs text-slate-500">NOT RUN · No result is fabricated before explicit evaluation.</div>}</div> }
+
+  function TradeJournal() { const trades = paper.account?.closed_trades ?? []; return <div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">BACKEND PAPER CLOSED TRADES</div><h2 className="mt-1 text-lg font-semibold text-white">Trade Journal</h2>{trades.length ? <div className="mt-5 overflow-x-auto"><table className="w-full text-xs"><thead className="mono text-[9px] text-slate-500"><tr>{['SYMBOL','ENTRY','EXIT','NET P/L','RETURN'].map(x => <th className="px-3 py-3 text-left" key={x}>{x}</th>)}</tr></thead><tbody>{trades.slice().reverse().map((t,i) => <tr className="border-t border-slate-800" key={`${t.entry_timestamp}-${i}`}><td className="px-3 py-3">{t.symbol}</td><td className="px-3 py-3">{money(t.entry_price)}</td><td className="px-3 py-3">{money(t.exit_price)}</td><td className="px-3 py-3">{money(t.net_pnl)}</td><td className="px-3 py-3">{number(t.return_pct)}%</td></tr>)}</tbody></table></div> : <div className="mt-5 text-xs text-slate-500">{paper.loading ? 'Loading…' : 'No authoritative closed paper trades available.'}</div>}</div> }
+
+  function SettingsView() { return <div className="grid gap-4 lg:grid-cols-2"><div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">RUNTIME</div><div className="mt-4 space-y-3 text-xs text-slate-400"><div>API base URL: <span className="mono text-slate-200">{API_BASE_URL}</span></div><div>Market source: <span className="text-slate-200">{real ? 'Binance Public REST' : 'Deterministic Mock'}</span></div><div>Symbol: <span className="text-slate-200">{selection.symbol}</span></div><div>Timeframe: <span className="text-slate-200">{selection.timeframe}</span></div></div></div><div className="panel rounded-lg p-5"><div className="mono text-[9px] text-slate-500">SAFETY</div><div className="mt-4 space-y-3 text-xs text-slate-400"><p>No broker credentials are configured in this UI.</p><p>No live-order control is exposed.</p><p>Real market failure never silently falls back to mock.</p><p>RiskContext remains fail-closed when incomplete.</p></div></div></div> }
+
+  const content: Record<View, JSX.Element> = { Dashboard: <Dashboard/>, Market: <Market/>, Strategy: <Strategy/>, 'Risk Guard': <RiskGuard/>, 'Paper Trading': <PaperTrading/>, Backtest: <Backtest/>, 'Trade Journal': <TradeJournal/>, Settings: <SettingsView/> }
+
+  return <div className="app-shell min-h-screen text-slate-200"><aside className="sidebar fixed inset-y-0 left-0 w-[238px] px-4 py-6"><div className="mb-8 flex items-center gap-3"><div className="grid size-9 place-items-center rounded bg-sky-500/15 text-sky-300"><ShieldCheck size={20}/></div><div><div className="font-bold text-white">TradingGuard</div><div className="mono text-[10px] text-slate-500">CONTROL CENTER · v0.8</div></div></div><div className="mono mb-3 text-[9px] uppercase tracking-[.2em] text-slate-600">Operations</div>{nav.map(item => { const Icon=item.icon; return <button key={item.name} onClick={() => setView(item.name)} className={`nav-item mb-1 flex w-full items-center gap-2 rounded px-3 py-2.5 text-left text-xs ${view === item.name ? 'active' : ''}`}><Icon size={14}/>{item.name}</button> })}<div className="panel-soft absolute bottom-5 left-4 right-4 rounded p-3 text-[10px] text-slate-500">Backend-authoritative control center. No broker execution.</div></aside><main className="main-area ml-[238px] min-h-screen px-8 py-6"><header className="mb-6 border-b border-slate-800 pb-5"><div className="mb-5 flex flex-wrap items-center justify-between gap-4"><div><div className="mono text-[10px] uppercase tracking-[.18em] text-slate-500">Risk control center</div><h1 className="text-2xl font-bold text-white">{view === 'Dashboard' ? 'Real Market Dashboard' : view}</h1></div><div className={`rounded border px-3 py-2 mono text-[10px] ${real ? 'border-sky-500/30 bg-sky-500/10 text-sky-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}>● {real ? 'REAL PUBLIC DATA · BINANCE' : 'MOCK DATA'}</div></div>{controls}</header>{error && <div className="mb-5 rounded border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200">Selected source unavailable: {error}. No silent fallback to mock data.</div>}{content[view]}<footer className="mt-6 border-t border-slate-800 py-5 mono text-[9px] text-slate-600">SOURCE: {real ? 'BINANCE PUBLIC REST MARKET DATA' : 'TRADINGGUARD DETERMINISTIC MOCK'} · READ ONLY MARKET INPUT · NO BROKER EXECUTION</footer></main></div>
 }
 export default App
