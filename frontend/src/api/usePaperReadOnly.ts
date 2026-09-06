@@ -15,6 +15,13 @@ export interface PaperAccountState {
   refresh: () => Promise<void>
 }
 
+type PaperSnapshot = {
+  account: PaperAccount | null
+  performance: PaperPerformanceSnapshot | null
+  available: boolean
+  message: string | null
+}
+
 const initialState = {
   account: null as PaperAccount | null,
   performance: null as PaperPerformanceSnapshot | null,
@@ -22,6 +29,30 @@ const initialState = {
   mutating: false,
   available: false,
   message: null as string | null,
+}
+
+async function fetchPaperSnapshot(): Promise<PaperSnapshot> {
+  try {
+    const account = await tradingGuardApi.getPaperState()
+    try {
+      const performance = await tradingGuardApi.getPaperPerformance()
+      return { account, performance, available: true, message: null }
+    } catch (cause: unknown) {
+      return {
+        account,
+        performance: null,
+        available: true,
+        message: cause instanceof Error ? cause.message : 'Paper performance is unavailable.',
+      }
+    }
+  } catch (cause: unknown) {
+    return {
+      account: null,
+      performance: null,
+      available: false,
+      message: cause instanceof Error ? cause.message : 'Paper session is not available.',
+    }
+  }
 }
 
 /**
@@ -34,30 +65,17 @@ const initialState = {
 export function usePaperReadOnly(): PaperAccountState {
   const [state, setState] = useState(initialState)
 
-  const load = useCallback(async (): Promise<void> => {
-    try {
-      const account = await tradingGuardApi.getPaperState()
-      let performance: PaperPerformanceSnapshot | null = null
-      let message: string | null = null
-      try {
-        performance = await tradingGuardApi.getPaperPerformance()
-      } catch (cause: unknown) {
-        message = cause instanceof Error ? cause.message : 'Paper performance is unavailable.'
-      }
-      setState(value => ({ ...value, account, performance, loading: false, available: true, message }))
-    } catch (cause: unknown) {
-      setState(value => ({
-        ...value,
-        account: null,
-        performance: null,
-        loading: false,
-        available: false,
-        message: cause instanceof Error ? cause.message : 'Paper session is not available.',
-      }))
-    }
+  const applySnapshot = useCallback((snapshot: PaperSnapshot): void => {
+    setState(value => ({ ...value, ...snapshot, loading: false }))
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    let active = true
+    void fetchPaperSnapshot().then(snapshot => {
+      if (active) applySnapshot(snapshot)
+    })
+    return () => { active = false }
+  }, [applySnapshot])
 
   const start = useCallback(async (): Promise<void> => {
     setState(value => ({ ...value, mutating: true, message: null }))
@@ -83,8 +101,9 @@ export function usePaperReadOnly(): PaperAccountState {
 
   const refresh = useCallback(async (): Promise<void> => {
     setState(value => ({ ...value, loading: true, message: null }))
-    await load()
-  }, [load])
+    const snapshot = await fetchPaperSnapshot()
+    applySnapshot(snapshot)
+  }, [applySnapshot])
 
   return { ...state, start, reset, refresh }
 }
