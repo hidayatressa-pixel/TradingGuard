@@ -37,13 +37,13 @@ def test_allow_schedules_exact_authoritative_sizing_quantity() -> None:
         strategy=strategy(),
         reference_entry_price=100.0,
         stop_loss_price=95.0,
-        risk_budget_pct=1.0,
+        risk_budget_pct=0.5,
     )
     assert result.scheduled is True
     assert result.gate is not None
     assert service.state().pending_entry is not None
     assert service.state().pending_entry.quantity == pytest.approx(result.gate.sizing.final_quantity)
-    assert service.state().pending_entry.quantity == pytest.approx(20.0)
+    assert service.state().pending_entry.quantity == pytest.approx(10.0)
     assert service.state().pending_entry.stop_loss_price == pytest.approx(95.0)
 
 
