@@ -36,7 +36,7 @@ function App(){
  // Binance REST includes the currently-forming candle as the last item. Execution decisions
  // deliberately exclude it, so every decision-facing screen must display the same completed
  // candle (-2) rather than the forming candle (-1). Live/current price remains display-only.
- const candle=data.candles.at(-1),completedCandle=data.candles.at(-2)
+ const completedCandle=data.candles.at(-2)
  const completedIndicator=data.indicators.at(-2),completedStrategy=data.strategies.at(-2)
  const real=source==='binance'
  const operational=paper.account?.open_position??paper.account?.pending_entry??paper.account?.pending_exit
