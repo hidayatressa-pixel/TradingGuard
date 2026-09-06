@@ -21,7 +21,7 @@ class AutoPaperCycleResult(BaseModel):
 
 
 class AutoPaperLoopService:
-    """One deterministic autonomous cycle. Scheduling/timing stays outside this service."""
+    """One authoritative PAPER cycle. Repeated calls are idempotent for the same candle."""
     def __init__(self, paper_service: PaperTradingService) -> None:
         self.paper_service = paper_service
         self.indicators = IndicatorService()
@@ -37,15 +37,41 @@ class AutoPaperLoopService:
         if not results:
             raise ValueError("Strategy could not be derived from authoritative candle data.")
         current = results[-1]
+        candle = candles[-1]
         account = self.paper_service.state()
+        if not account.active or not account.config.paper_trading_enabled:
+            raise ValueError("Paper trading is inactive; autonomous cycle remains fail-closed.")
+
+        # Establish the daily risk baseline before the prospective Risk Guard evaluation.
+        # Previously risk_day stayed None after Paper start, making every first auto entry fail closed forever.
+        self.paper_service.prepare_risk_day(candle.timestamp)
+        account = self.paper_service.state()
+
+        if account.last_event_timestamp is not None and candle.timestamp <= account.last_event_timestamp:
+            return AutoPaperCycleResult(strategy=current, entry=None, account=account,
+                                        reason="Candle already processed; waiting for a newer authoritative candle.")
+
         entry = None
         if account.open_position is None and account.pending_entry is None and account.pending_exit is None:
             if current.data_ready and current.assessment in {Assessment.BULLISH, Assessment.STRONG_BULLISH}:
-                entry = self.orchestrator.evaluate_and_schedule_auto(strategy=current, candles=candles,
-                    risk_budget_pct=risk_budget_pct, max_allocation_pct=max_allocation_pct, policy=policy)
-                account = self.paper_service.state()
-                return AutoPaperCycleResult(strategy=current, entry=entry, account=account, reason=entry.reason)
-            return AutoPaperCycleResult(strategy=current, entry=None, account=account,
-                                        reason="Strategy interlock is not bullish; no new PAPER entry considered.")
-        return AutoPaperCycleResult(strategy=current, entry=None, account=account,
-                                    reason="Paper account has an open or pending action; new entry interlock remains closed.")
+                entry = self.orchestrator.evaluate_and_schedule_auto(
+                    strategy=current, candles=candles, risk_budget_pct=risk_budget_pct,
+                    max_allocation_pct=max_allocation_pct, policy=policy,
+                )
+
+        # Consume the signal candle after scheduling. This advances event_index once, so a sized
+        # pending entry is due exactly on the next new candle and receives fresh execution revalidation.
+        self.paper_service.process_auto_candle(candle, current, execution_policy=policy)
+        account = self.paper_service.state()
+
+        if entry is not None:
+            return AutoPaperCycleResult(strategy=current, entry=entry, account=account, reason=entry.reason)
+        if account.open_position is not None:
+            reason = "PAPER position is active; autonomous stop/exit monitoring continues."
+        elif account.pending_entry is not None:
+            reason = "Sized PAPER BUY is pending next-candle execution revalidation."
+        elif current.data_ready and current.assessment in {Assessment.BULLISH, Assessment.STRONG_BULLISH}:
+            reason = "Bullish setup was evaluated but no new entry is currently schedulable."
+        else:
+            reason = "Strategy interlock is not bullish; no new PAPER entry considered."
+        return AutoPaperCycleResult(strategy=current, entry=None, account=account, reason=reason)
