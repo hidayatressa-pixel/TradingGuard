@@ -10,7 +10,6 @@ from backend.app.risk.models import RiskContext
 
 class RiskContextAvailability(BaseModel):
     model_config = ConfigDict(strict=True)
-
     available: bool
     context: RiskContext | None = None
     missing_facts: list[str]
@@ -18,27 +17,28 @@ class RiskContextAvailability(BaseModel):
 
 
 class PaperRiskContextBuilder:
-    """Build only risk facts that are authoritative from current paper state.
-
-    V0.7 does not retain day-start or peak-equity baselines, so daily loss and
-    drawdown must remain unavailable rather than being fabricated as zero.
-    """
+    """Build prospective-entry RiskContext only from authoritative paper state."""
 
     def build(self, account: PaperAccount, risk_per_trade_pct: float | None) -> RiskContextAvailability:
         missing: list[str] = []
         if risk_per_trade_pct is None or not math.isfinite(risk_per_trade_pct) or risk_per_trade_pct < 0:
             missing.append("risk_per_trade_pct")
-
-        # These cannot be derived truthfully from committed V0.7 PaperAccount.
-        missing.extend(["daily_loss_pct", "current_drawdown_pct"])
-
+        if account.risk_day is None:
+            missing.append("risk_day")
+        if not math.isfinite(account.day_start_equity) or account.day_start_equity <= 0:
+            missing.append("day_start_equity")
+        if not math.isfinite(account.peak_realized_equity) or account.peak_realized_equity <= 0:
+            missing.append("peak_realized_equity")
         if missing:
-            return RiskContextAvailability(
-                available=False,
-                context=None,
-                missing_facts=missing,
-                reason="Complete authoritative RiskContext is unavailable; prospective entry remains fail-closed.",
-            )
+            return RiskContextAvailability(available=False, context=None, missing_facts=missing, reason="Complete authoritative RiskContext is unavailable; prospective entry remains fail-closed.")
 
-        # Kept unreachable until authoritative baselines are introduced.
-        raise RuntimeError("RiskContext builder requires authoritative daily-loss and drawdown baselines.")
+        daily_loss_pct = max((account.day_start_equity - account.realized_equity) / account.day_start_equity * 100.0, 0.0)
+        drawdown_pct = max((account.peak_realized_equity - account.realized_equity) / account.peak_realized_equity * 100.0, 0.0)
+        exposure_notional = account.open_position.entry_notional if account.open_position is not None else 0.0
+        total_exposure_pct = (exposure_notional / account.realized_equity * 100.0) if account.realized_equity > 0 else math.inf
+        values = (daily_loss_pct, drawdown_pct, total_exposure_pct)
+        if not all(math.isfinite(value) and value >= 0 for value in values):
+            return RiskContextAvailability(available=False, context=None, missing_facts=["derived_account_risk"], reason="Derived account risk is invalid; prospective entry remains fail-closed.")
+
+        context = RiskContext(risk_per_trade_pct=float(risk_per_trade_pct), daily_loss_pct=daily_loss_pct, total_exposure_pct=total_exposure_pct, open_positions=1 if account.open_position is not None else 0, current_drawdown_pct=drawdown_pct, trading_enabled=account.active and account.config.paper_trading_enabled)
+        return RiskContextAvailability(available=True, context=context, missing_facts=[], reason="Complete authoritative paper RiskContext is available for Risk Guard evaluation.")
