@@ -14,7 +14,7 @@ from backend.app.market.validation import validate_candle_dataset
 from backend.app.paper.auto_loop import AutoPaperCycleResult, AutoPaperLoopService
 from backend.app.paper.manual import ManualGuardedTradeResult, ManualGuardedTradeService
 from backend.app.paper.models import PaperAccount, PaperPerformanceSnapshot, PaperTradingConfig
-from backend.app.paper.service import PaperTradingService
+from backend.app.paper.persistent_service import PersistentPaperTradingService
 from backend.app.risk.context import PaperRiskContextBuilder, RiskContextAvailability
 from backend.app.risk.models import RiskContext, RiskPolicy, RiskResult
 from backend.app.risk.service import RiskService
@@ -38,7 +38,7 @@ class PaperProcessRequest(BaseModel):
 
 app=FastAPI(title='TradingGuard',version='0.9.0-dev')
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:5173','http://127.0.0.1:5173'],allow_credentials=False,allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Accept'])
-mock_provider=MockMarketDataProvider(); real_provider=BinancePublicMarketDataProvider(); indicator_service=IndicatorService(); strategy_service=StrategyService(); risk_service=RiskService(); risk_sizing_service=RiskSizingService(); risk_context_builder=PaperRiskContextBuilder(); backtest_service=BacktestService(); paper_service=PaperTradingService(); auto_paper_loop=AutoPaperLoopService(paper_service); manual_trade_service=ManualGuardedTradeService(paper_service)
+mock_provider=MockMarketDataProvider(); real_provider=BinancePublicMarketDataProvider(); indicator_service=IndicatorService(); strategy_service=StrategyService(); risk_service=RiskService(); risk_sizing_service=RiskSizingService(); risk_context_builder=PaperRiskContextBuilder(); backtest_service=BacktestService(); paper_service=PersistentPaperTradingService(); auto_paper_loop=AutoPaperLoopService(paper_service); manual_trade_service=ManualGuardedTradeService(paper_service)
 
 def _provider(source:str)->MarketDataProvider:
     if source=='mock': return mock_provider
@@ -102,27 +102,30 @@ def _parse_risk(payload:dict)->RiskResult:
 def start_paper(payload:dict|None=Body(default=None))->PaperAccount:
     try:r=PaperStartRequest.model_validate(payload or {});return paper_service.start(PaperTradingConfig.model_validate(r.config or {}))
     except (KeyError,ValueError,TypeError) as exc:raise HTTPException(status_code=400,detail=str(exc)) from exc
-
 @app.post('/paper/manual-buy',response_model=ManualGuardedTradeResult)
 def manual_paper_buy(symbol:str=Query(...,min_length=1),timeframe:str=Query(...,pattern=r'^(1m|5m|15m|1h|4h|1d)$'),source:str=Query('binance',pattern=r'^(mock|binance)$'),risk_budget_pct:float=Query(0.5,gt=0,le=1.0),max_allocation_pct:float=Query(20.0,gt=0,le=100))->ManualGuardedTradeResult:
-    """Interactive PAPER BUY: backend derives strategy/stop/sizing/risk; no client bypass and no pending loop."""
     try:
         candles,completed,strategy=_authoritative_market(source,symbol,timeframe)
-        return manual_trade_service.buy(completed_candles=completed,strategy=strategy,market_price=float(candles[-1].close),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
+        result=manual_trade_service.buy(completed_candles=completed,strategy=strategy,market_price=float(candles[-1].close),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
+        _record_manual_decision(result); return result
     except HTTPException: raise
     except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
-
 @app.post('/paper/manual-sell',response_model=ManualGuardedTradeResult)
 def manual_paper_sell(source:str=Query('binance',pattern=r'^(mock|binance)$'))->ManualGuardedTradeResult:
-    """Close the active PAPER position immediately using authoritative market data."""
     try:
         account=paper_service.state(); position=account.open_position
         if position is None: raise HTTPException(status_code=422,detail='No active paper position to SELL.')
         candles,_,strategy=_authoritative_market(source,position.symbol,position.timeframe)
-        return manual_trade_service.sell(strategy=strategy,market_price=float(candles[-1].close))
+        result=manual_trade_service.sell(strategy=strategy,market_price=float(candles[-1].close)); _record_manual_decision(result); return result
     except HTTPException: raise
     except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
 
+def _record_manual_decision(result:ManualGuardedTradeResult)->None:
+    gate=result.gate; sizing=gate.sizing if gate is not None else None; risk=gate.risk if gate is not None else None; stop=result.auto_stop
+    paper_service.store.record_decision(action=result.action,symbol=result.strategy.symbol,timeframe=result.strategy.timeframe,strategy_assessment=result.strategy.assessment.value,strategy_score=result.strategy.score,decision=result.decision,executed=result.executed,reason=result.reason,execution_price=result.execution_price,risk_decision=risk.decision.value if risk else None,stop_loss_price=stop.stop_loss_price if stop else None,risk_per_trade_pct=sizing.risk_per_trade_pct if sizing else None,quantity=sizing.final_quantity if sizing else None)
+
+@app.get('/paper/decisions')
+def get_paper_decisions(limit:int=Query(200,ge=1,le=1000))->list[dict[str,object]]: return paper_service.store.list_decisions(limit)
 @app.post('/paper/auto-cycle',response_model=AutoPaperCycleResult)
 def auto_paper_cycle(symbol:str=Query(...,min_length=1),timeframe:str=Query(...,pattern=r'^(1m|5m|15m|1h|4h|1d)$'),source:str=Query('binance',pattern=r'^(mock|binance)$'),limit:int=Query(100,ge=35,le=500),risk_budget_pct:float=Query(0.5,gt=0,le=1.0),max_allocation_pct:float=Query(20.0,gt=0,le=100))->AutoPaperCycleResult:
     try:
