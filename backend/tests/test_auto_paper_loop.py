@@ -26,6 +26,11 @@ def bullish(candle: Candle) -> StrategyResult:
         score=4, normalized_score=90, assessment=Assessment.BULLISH, data_ready=True, evidence=[])
 
 
+def bearish(candle: Candle) -> StrategyResult:
+    return StrategyResult(timestamp=candle.timestamp, symbol=candle.symbol, timeframe=candle.timeframe,
+        score=-4, normalized_score=10, assessment=Assessment.STRONG_BEARISH, data_ready=True, evidence=[])
+
+
 def started_loop() -> tuple[PaperTradingService, AutoPaperLoopService]:
     service = PaperTradingService(); service.start(PaperTradingConfig(transaction_cost_pct=0.0, slippage_pct=0.0))
     return service, AutoPaperLoopService(service)
@@ -63,6 +68,9 @@ def test_next_completed_candle_revalidates_and_executes_pending_sized_entry(monk
     assert second.authorization is not None and second.authorization.gate is not None
     assert second.authorization.gate.risk is not None
     assert second.authorization.gate.risk.decision == RiskDecision.ALLOW
+    assert second.mark_price == candles(41)[-1].close
+    assert second.unrealized_pnl is not None
+    assert second.unrealized_return_pct is not None
 
 
 def test_same_completed_candle_is_idempotent_and_reports_pending_state(monkeypatch) -> None:
@@ -83,6 +91,21 @@ def test_duplicate_active_position_reports_monitoring_not_setup_wait(monkeypatch
     assert repeated.account.open_position is not None
     assert "remains active" in repeated.reason
     assert "setup" not in repeated.reason.lower()
+    assert repeated.mark_price is not None and repeated.unrealized_pnl is not None
+
+
+def test_strong_bearish_active_position_arms_exit_and_preserves_entry_authorization(monkeypatch) -> None:
+    service, loop = started_loop(); force_bullish(loop, monkeypatch)
+    loop.cycle(candles(40)); loop.cycle(candles(41))
+    monkeypatch.setattr(loop.strategy, "build_results", lambda values: [bearish(values[-1])])
+    result = loop.cycle(candles(42))
+    assert result.strategy.assessment == Assessment.STRONG_BEARISH
+    assert result.account.open_position is not None
+    assert result.account.pending_exit is not None
+    assert result.authorization is not None
+    assert result.authorization.gate is not None and result.authorization.gate.risk is not None
+    assert result.authorization.gate.risk.decision == RiskDecision.ALLOW
+    assert "EXIT ARMED" in result.reason
 
 
 def test_operational_instrument_is_locked_while_pending(monkeypatch) -> None:
