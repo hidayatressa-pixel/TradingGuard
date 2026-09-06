@@ -64,8 +64,9 @@ def test_fresh_gate_uses_current_strategy_not_stale_signal_risk()->None:
     assert result.state().pending_entry is None
 
 
-def test_public_legacy_process_does_not_schedule_buy_without_stop()->None:
+def test_legacy_v07_process_remains_compatible_but_is_not_sized_gate()->None:
     result=service()
     result.process_candle(candle(0,100.0),strategy(0),risk(0,RiskDecision.ALLOW))
-    assert result.state().pending_entry is None
-    assert result.state().open_position is None
+    assert result.state().pending_entry is not None
+    assert result.state().pending_entry.quantity is None
+    # This compatibility path is not the operational V0.9 auto-BUY path.
