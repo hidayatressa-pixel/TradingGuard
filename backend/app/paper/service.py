@@ -33,10 +33,23 @@ class PaperTradingService:
         account=self.state(); day=timestamp.date().isoformat()
         if account.risk_day != day: account.risk_day=day; account.day_start_equity=account.realized_equity
 
+    def prepare_risk_day(self,timestamp:datetime)->PaperAccount:
+        """Establish the authoritative daily risk baseline before a prospective auto-entry gate."""
+        account=self.state()
+        if not account.active or not account.config.paper_trading_enabled: raise ValueError("Paper trading is inactive; risk-day preparation remains fail-closed.")
+        self._roll_risk_day(timestamp)
+        return account
+
     def _validate_event(self,candle:Candle,strategy:StrategyResult,risk:RiskResult)->None:
         if candle.timestamp!=strategy.timestamp or candle.timestamp!=risk.timestamp: raise ValueError("Candle, strategy, and risk timestamps must match.")
         if candle.symbol!=strategy.symbol or candle.symbol!=risk.symbol: raise ValueError("Candle, strategy, and risk symbols must match.")
         if candle.timeframe!=strategy.timeframe or candle.timeframe!=risk.timeframe: raise ValueError("Candle, strategy, and risk timeframes must match.")
+        if self.account is not None and self.account.last_event_timestamp is not None and candle.timestamp<=self.account.last_event_timestamp: raise ValueError("Paper events must arrive in strictly increasing chronological order.")
+
+    def _validate_auto_event(self,candle:Candle,strategy:StrategyResult)->None:
+        if candle.timestamp!=strategy.timestamp: raise ValueError("Candle and strategy timestamps must match.")
+        if candle.symbol!=strategy.symbol: raise ValueError("Candle and strategy symbols must match.")
+        if candle.timeframe!=strategy.timeframe: raise ValueError("Candle and strategy timeframes must match.")
         if self.account is not None and self.account.last_event_timestamp is not None and candle.timestamp<=self.account.last_event_timestamp: raise ValueError("Paper events must arrive in strictly increasing chronological order.")
 
     def _execute_entry(self,candle:Candle,pending:PendingEntry)->None:
@@ -63,13 +76,9 @@ class PaperTradingService:
         account.pending_entry=PendingEntry(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=account.event_index+1,stop_loss_price=stop_loss_price,quantity=quantity); return account
 
     def _execute_due_sized_entry(self,candle:Candle,strategy:StrategyResult,pending:PendingEntry,policy:RiskPolicy|None)->bool:
-        account=self.state()
-        result=self.execution_revalidation.evaluate(account=account,candle=candle,strategy=strategy,pending=pending,policy=policy)
-        if not result.allowed:
-            account.pending_entry=None
-            return False
-        self._execute_entry(candle,pending)
-        return True
+        account=self.state(); result=self.execution_revalidation.evaluate(account=account,candle=candle,strategy=strategy,pending=pending,policy=policy)
+        if not result.allowed: account.pending_entry=None; return False
+        self._execute_entry(candle,pending); return True
 
     def _close_position(self,*,timestamp:datetime,effective_price:float,exit_signal_timestamp:datetime,exit_assessment:str,exit_reason:PaperExitReason)->None:
         account=self.state(); position=account.open_position
@@ -91,20 +100,30 @@ class PaperTradingService:
         else: return False
         effective_price=base_fill*(1.0-account.config.slippage_pct/100.0); self._close_position(timestamp=candle.timestamp,effective_price=effective_price,exit_signal_timestamp=candle.timestamp,exit_assessment="STOP_LOSS",exit_reason=PaperExitReason.STOP_LOSS); return True
 
+    def process_auto_candle(self,candle:Candle,strategy:StrategyResult,execution_policy:RiskPolicy|None=None)->PaperAccount:
+        """Consume one authoritative candle for V0.9 auto PAPER without the V0.7 legacy entry fallback."""
+        account=self.state(); self._validate_auto_event(candle,strategy); self._roll_risk_day(candle.timestamp); current_index=account.event_index; position_at_candle_start=account.open_position is not None
+        if not account.config.paper_trading_enabled: account.pending_entry=None
+        if account.pending_entry is not None and account.pending_entry.execute_index==current_index:
+            if account.pending_entry.quantity is not None: self._execute_due_sized_entry(candle,strategy,account.pending_entry,execution_policy)
+            else: account.pending_entry=None
+        if account.pending_exit is not None and account.pending_exit.execute_index==current_index: self._execute_exit(candle,account.pending_exit)
+        stopped=False
+        if position_at_candle_start and account.open_position is not None: stopped=self._execute_stop_if_triggered(candle)
+        if not stopped and account.open_position is not None and account.pending_exit is None:
+            if strategy.data_ready and strategy.assessment in {Assessment.NEUTRAL,Assessment.BEARISH,Assessment.STRONG_BEARISH}: account.pending_exit=PendingExit(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=current_index+1)
+        account.last_event_timestamp=candle.timestamp; account.event_index+=1; return account
+
     def process_candle(self,candle:Candle,strategy:StrategyResult,risk:RiskResult,stop_loss_price:float|None=None,execution_policy:RiskPolicy|None=None)->PaperAccount:
         account=self.state(); self._validate_event(candle,strategy,risk); self._roll_risk_day(candle.timestamp); current_index=account.event_index; position_at_candle_start=account.open_position is not None; sized_entry_vetoed=False
         if not account.config.paper_trading_enabled: account.pending_entry=None
         if account.pending_entry is not None and account.pending_entry.execute_index==current_index:
-            if account.pending_entry.quantity is not None:
-                sized_entry_vetoed=not self._execute_due_sized_entry(candle,strategy,account.pending_entry,execution_policy)
-            else:
-                self._execute_entry(candle,account.pending_entry)
+            if account.pending_entry.quantity is not None: sized_entry_vetoed=not self._execute_due_sized_entry(candle,strategy,account.pending_entry,execution_policy)
+            else: self._execute_entry(candle,account.pending_entry)
         if account.pending_exit is not None and account.pending_exit.execute_index==current_index: self._execute_exit(candle,account.pending_exit)
         stopped=False
         if position_at_candle_start and account.open_position is not None: stopped=self._execute_stop_if_triggered(candle)
         if not stopped:
-            # V0.7 legacy scheduling is retained for compatibility. Operational V0.9 auto-BUY must use schedule_sized_entry.
-            # A sized-entry veto owns the current candle: it must not fall through and create a fresh legacy pending BUY.
             if not sized_entry_vetoed and account.config.paper_trading_enabled and account.open_position is None and account.pending_entry is None:
                 if strategy.data_ready and strategy.assessment in {Assessment.BULLISH,Assessment.STRONG_BULLISH} and risk.decision==RiskDecision.ALLOW: account.pending_entry=PendingEntry(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=current_index+1,stop_loss_price=stop_loss_price)
             elif account.open_position is not None and account.pending_exit is None:
