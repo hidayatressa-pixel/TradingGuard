@@ -4,6 +4,7 @@ from backend.app.market.models import Candle
 from backend.app.paper.auto_loop import AutoPaperLoopService
 from backend.app.paper.models import PaperTradingConfig
 from backend.app.paper.service import PaperTradingService
+from backend.app.risk.models import RiskDecision
 from backend.app.strategy.models import Assessment, StrategyResult
 
 TS = datetime(2026, 9, 6, tzinfo=timezone.utc)
@@ -40,6 +41,9 @@ def test_first_auto_cycle_initializes_risk_day_and_can_schedule(monkeypatch) -> 
     assert service.state().risk_day == data[-2].timestamp.date().isoformat()
     assert result.strategy.timestamp == data[-2].timestamp
     assert result.entry is not None and result.entry.execution_permission_established is True and result.entry.scheduled is True
+    assert result.authorization is result.entry
+    assert result.authorization.gate is not None and result.authorization.gate.risk is not None
+    assert result.authorization.gate.risk.decision == RiskDecision.ALLOW
     assert service.state().pending_entry is not None
     assert service.state().event_index == 1
 
@@ -53,13 +57,29 @@ def test_next_completed_candle_revalidates_and_executes_pending_sized_entry(monk
     assert second.account.pending_entry is None
     assert second.account.open_position is not None and second.account.open_position.stop_loss_price is not None
     assert second.account.event_index == 2
+    assert second.entry is None
+    assert second.authorization is not None and second.authorization.gate is not None
+    assert second.authorization.gate.risk is not None
+    assert second.authorization.gate.risk.decision == RiskDecision.ALLOW
 
 
 def test_same_completed_candle_is_idempotent_and_does_not_advance_execution_clock(monkeypatch) -> None:
     service, loop = started_loop(); force_bullish(loop, monkeypatch); data = candles(40)
-    loop.cycle(data); before = service.state().event_index
+    first = loop.cycle(data); before = service.state().event_index
     repeated = loop.cycle(data)
     assert repeated.account.event_index == before
     assert repeated.account.open_position is None
     assert repeated.account.pending_entry is not None
+    assert repeated.authorization is not None
+    assert repeated.authorization == first.authorization
     assert "already processed" in repeated.reason
+
+
+def test_eligible_bullish_flat_cycle_never_returns_unevaluated_wait(monkeypatch) -> None:
+    service, loop = started_loop(); force_bullish(loop, monkeypatch)
+    result = loop.cycle(candles(40))
+    assert result.entry is not None
+    assert result.authorization is not None
+    gate = result.authorization.gate
+    assert gate is not None and gate.risk is not None
+    assert gate.risk.decision in {RiskDecision.ALLOW, RiskDecision.WARNING, RiskDecision.BLOCK}
