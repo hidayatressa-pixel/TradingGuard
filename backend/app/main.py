@@ -95,7 +95,12 @@ def start_paper(payload:dict|None=Body(default=None))->PaperAccount:
 @app.post('/paper/auto-cycle',response_model=AutoPaperCycleResult)
 def auto_paper_cycle(symbol:str=Query(...,min_length=1),timeframe:str=Query(...,pattern=r'^(1m|5m|15m|1h|4h|1d)$'),source:str=Query('binance',pattern=r'^(mock|binance)$'),limit:int=Query(100,ge=35,le=500),risk_budget_pct:float=Query(0.5,gt=0,le=1.0),max_allocation_pct:float=Query(20.0,gt=0,le=100))->AutoPaperCycleResult:
     """Authoritative autonomous PAPER evaluation: client cannot provide strategy, price, stop, or policy."""
-    try:return auto_paper_loop.cycle(_candles(source,symbol,timeframe,limit),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
+    try:
+        account=paper_service.state()
+        if not account.active or not account.config.paper_trading_enabled:
+            raise HTTPException(status_code=422,detail='Paper trading is inactive; autonomous evaluation remains fail-closed.')
+        return auto_paper_loop.cycle(_candles(source,symbol,timeframe,limit),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
+    except HTTPException: raise
     except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
 @app.post('/paper/process',response_model=PaperAccount)
 def process_paper(payload:dict=Body(...))->PaperAccount:
