@@ -10,6 +10,8 @@ from backend.app.indicators.service import IndicatorService
 from backend.app.market.data_provider import MockMarketDataProvider
 from backend.app.market.models import Candle
 from backend.app.market.validation import validate_candle_dataset
+from backend.app.paper.models import PaperAccount, PaperPerformanceSnapshot, PaperTradingConfig
+from backend.app.paper.service import PaperTradingService
 from backend.app.risk.models import RiskContext, RiskPolicy, RiskResult
 from backend.app.risk.service import RiskService
 from backend.app.strategy.models import Assessment, StrategyEvidence, StrategyResult
@@ -54,12 +56,27 @@ class BacktestEvaluateRequest(BaseModel):
     config: dict | None = None
 
 
-app = FastAPI(title="TradingGuard", version="0.6.0")
+class PaperStartRequest(BaseModel):
+    model_config = ConfigDict()
+
+    config: dict | None = None
+
+
+class PaperProcessRequest(BaseModel):
+    model_config = ConfigDict()
+
+    candle: dict
+    strategy: dict
+    risk: dict
+
+
+app = FastAPI(title="TradingGuard", version="0.7.0")
 provider = MockMarketDataProvider()
 indicator_service = IndicatorService()
 strategy_service = StrategyService()
 risk_service = RiskService()
 backtest_service = BacktestService()
+paper_service = PaperTradingService()
 
 
 @app.get("/health")
@@ -171,3 +188,65 @@ def evaluate_backtest(
         return backtest_service.evaluate(candles, strategy_results, config)
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _parse_strategy(payload: dict) -> StrategyResult:
+    strategy_payload = dict(payload)
+    strategy_payload["timestamp"] = datetime.fromisoformat(str(strategy_payload["timestamp"]).replace("Z", "+00:00"))
+    strategy_payload["assessment"] = Assessment(strategy_payload["assessment"])
+    for evidence in strategy_payload.get("evidence", []):
+        evidence["indicator"] = str(evidence["indicator"])
+        evidence["condition"] = str(evidence["condition"])
+        evidence["description"] = str(evidence["description"])
+    return StrategyResult.model_validate(strategy_payload)
+
+
+def _parse_risk(payload: dict) -> RiskResult:
+    risk_payload = dict(payload)
+    risk_payload["timestamp"] = datetime.fromisoformat(str(risk_payload["timestamp"]).replace("Z", "+00:00"))
+    return RiskResult.model_validate(risk_payload)
+
+
+@app.post("/paper/start", response_model=PaperAccount)
+def start_paper(payload: dict | None = Body(default=None)) -> PaperAccount:
+    try:
+        request = PaperStartRequest.model_validate(payload or {})
+        config = PaperTradingConfig.model_validate(request.config or {})
+        return paper_service.start(config)
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/paper/process", response_model=PaperAccount)
+def process_paper(payload: dict = Body(...)) -> PaperAccount:
+    try:
+        request = PaperProcessRequest.model_validate(payload)
+        candle_payload = dict(request.candle)
+        candle_payload["timestamp"] = datetime.fromisoformat(str(candle_payload["timestamp"]).replace("Z", "+00:00"))
+        candle = Candle.model_validate(candle_payload)
+        strategy = _parse_strategy(request.strategy)
+        risk = _parse_risk(request.risk)
+        return paper_service.process_candle(candle, strategy, risk)
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/paper/state", response_model=PaperAccount)
+def get_paper_state() -> PaperAccount:
+    try:
+        return paper_service.state()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/paper/performance", response_model=PaperPerformanceSnapshot)
+def get_paper_performance() -> PaperPerformanceSnapshot:
+    try:
+        return paper_service.performance()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/paper/reset", response_model=PaperAccount)
+def reset_paper() -> PaperAccount:
+    return paper_service.reset()

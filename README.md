@@ -23,7 +23,7 @@ MockMarketDataProvider
         ↓
 Normalized OHLCV candles
         ↓
-Indicators (future phase)
+Technical indicators
 
 This engine is designed to return normalized OHLCV data with consistent fields such as timestamp, symbol, timeframe, open, high, low, close, and volume. The current implementation uses simulated candle data only and must not be treated as real market information.
 
@@ -88,9 +88,9 @@ Indicators
     ↓
 Strategy / Signal Score
     ↓
-Risk Engine (future)
+Risk Engine
     ↓
-Paper Trading (future)
+Paper Trading
 
 ### EMA
 
@@ -183,6 +183,33 @@ The V0.6 layer is a deterministic historical evaluation engine. It is intentiona
 
 This V0.6 engine is separate from the V0.5 risk engine. Risk remains a read-only gate on strategy quality, while backtesting is the historical performance evaluation layer that measures the realized impact of those signals.
 
+## V0.7 Paper Trading Engine
+
+The V0.7 paper trading engine simulates account activity with virtual capital only. It is a deterministic, calculation-only layer that consumes completed candles, existing strategy results, and existing V0.5 risk results. It does not connect to a broker or exchange, place real orders, use API keys, move money, or provide live execution.
+
+### Scope and authority
+
+- Paper trading is long-only with at most one open position.
+- A new position requires `data_ready == True`, a `BULLISH` or `STRONG_BULLISH` assessment, `RiskDecision.ALLOW`, paper trading enabled, and no open or pending position.
+- `WARNING` and `BLOCK` never authorize entry. Risk remains authoritative; paper trading does not duplicate or reinterpret the risk engine.
+- There is no leverage, margin, short selling, pyramiding, averaging down, martingale behavior, or strategy optimization.
+
+### Sequential execution
+
+- Entry and exit signals are scheduled as explicit pending actions.
+- Pending actions execute on the next received candle OPEN, with adverse slippage applied to the effective entry or exit price.
+- The first pending entry or exit owns execution and cannot be replaced by later equivalent signals.
+- Transaction costs are charged on entry and exit, and position sizing includes the entry fee without allowing cash to become negative.
+- `INSUFFICIENT_DATA` neither opens nor closes a position and does not fabricate a signal.
+
+The account exposes virtual cash, realized equity, open position state, pending actions, closed trades, and transaction costs. Performance metrics use realized closed trades only; unrealized profit and loss is not marked to market. A reset clears the account, pending actions, trade journal, costs, and event chronology.
+
+The current V0.7 session is process-local and in memory. Restarting the backend clears paper state. There is no persistence and no multi-user support.
+
+### Backtest versus paper trading
+
+V0.6 backtesting evaluates a historical candle sequence and reports deterministic performance metrics. V0.7 paper trading processes sequential events into a virtual account without real execution. Neither version guarantees future results or provides live trading functionality.
+
 ## Current status
 
-This project currently provides the initial modular architecture, mock dashboard data, a simulated market data engine, deterministic indicator calculations, a read-only strategy scoring layer with EMA, RSI, and MACD evidence, and a deterministic V0.6 backtest/performance evaluation engine. It deliberately does not include live trading, broker integration, order execution, AI-powered prediction, or credentialed access.
+This project currently provides the initial modular architecture, mock dashboard data, a simulated market data engine, deterministic indicator calculations, a read-only strategy scoring layer with EMA, RSI, and MACD evidence, a deterministic V0.6 backtest/performance evaluation engine, and a V0.7 in-memory paper trading engine. It deliberately does not include live trading, broker integration, order execution, AI-powered prediction, or credentialed access.
