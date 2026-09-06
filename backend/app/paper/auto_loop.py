@@ -31,7 +31,6 @@ class AutoPaperLoopService:
         self.last_authorization: AutoPaperEntryResult | None = None
 
     def clear_authorization(self) -> None:
-        """Clear process-local audit state when the PAPER account lifecycle resets."""
         self.last_authorization = None
 
     @staticmethod
@@ -69,10 +68,9 @@ class AutoPaperLoopService:
         if not account.active or not account.config.paper_trading_enabled:
             self.clear_authorization()
             raise ValueError("Paper trading is inactive; autonomous cycle remains fail-closed.")
+        if account.event_index == 0 and account.open_position is None and account.pending_action is None:
+            self.clear_authorization()
 
-        # A single PAPER account may hold at most one operational instrument. Never feed
-        # BTC candles into an ETH position (or a different timeframe) merely because the
-        # dashboard selection changed. That could otherwise corrupt stop/exit processing.
         operational = self._operational_instrument(account)
         if operational is not None and (candle.symbol, candle.timeframe) != operational:
             expected_symbol, expected_timeframe = operational
