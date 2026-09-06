@@ -10,6 +10,7 @@ TradingGuard is a personal trading decision-support and risk-management applicat
 - Risk engine
 - Paper trading workflow
 - Performance evaluation and backtesting
+- V0.8 backend-authoritative dashboard integration
 
 The architecture is intentionally modular so that each component can be tested independently and evolved without introducing live trading behavior prematurely.
 
@@ -57,10 +58,13 @@ The backend is a FastAPI service that exposes the application API and keeps futu
 - `backend/app/risk` for risk management
 - `backend/app/broker` for eventual broker integration placeholders only
 - `backend/app/backtest` for historical simulation and evaluation
+- `backend/app/paper` for process-local virtual paper trading
 
 ## Frontend
 
-The frontend is built with React, TypeScript, and Vite. It currently uses mock data to render a trading dashboard.
+The frontend is built with React, TypeScript, and Vite. In V0.8 it is a presentation/client layer: market, indicator, and strategy values are loaded from the FastAPI backend, while paper account/performance data is read from the existing backend session when available.
+
+The frontend must not become a second trading engine. It does not generate candles, calculate strategy or risk decisions, fabricate account values, or perform trade accounting.
 
 ### Run the frontend
 
@@ -71,11 +75,13 @@ The frontend is built with React, TypeScript, and Vite. It currently uses mock d
    - `npm run dev`
 4. Open the local Vite URL shown in the terminal.
 
+`VITE_API_URL` may be used to select the backend API base URL. If it is absent, the frontend uses `http://localhost:8000`.
+
 ## Security notes
 
 - Broker API keys are never exposed to the React frontend.
 - Broker credentials belong only in backend-controlled environment settings.
-- No live order execution or broker automation is included in this initial architecture.
+- No live order execution or broker automation is included in the current architecture.
 - No API keys or secrets are required for the current market data mock layer.
 
 ## Technical Indicators Engine
@@ -161,10 +167,6 @@ The service requires chronological, non-duplicate timestamps and does not use fu
 - Current market data is simulated.
 - This layer intentionally excludes broker logic, execution logic, AI/ML, credentials, and API keys.
 
-### Scope and safety
-
-The current market data remains simulated and offline by design. Indicator output and strategy assessment are mathematical transformations of mock or historical data only, and they are not predictions, trade recommendations, or risk decisions.
-
 ## V0.6 Backtest and Profit Evaluation
 
 The V0.6 layer is a deterministic historical evaluation engine. It is intentionally a calculation-only module and does not place live orders, connect to brokers, optimize parameters, or assume future knowledge.
@@ -210,6 +212,49 @@ The current V0.7 session is process-local and in memory. Restarting the backend 
 
 V0.6 backtesting evaluates a historical candle sequence and reports deterministic performance metrics. V0.7 paper trading processes sequential events into a virtual account without real execution. Neither version guarantees future results or provides live trading functionality.
 
+## V0.8 Trading Dashboard Integration
+
+V0.8 connects the dashboard to backend-authoritative data while preserving the safety boundaries of V0.5 through V0.7.
+
+### Authority boundary
+
+`MARKET CONDITION != EXECUTION PERMISSION`
+
+The Strategy Engine describes market condition. It does not authorize execution. Execution permission can come only from an authoritative RiskResult produced from a complete valid RiskContext.
+
+`PaperTradingConfig.position_size_pct` is capital allocation, not `RiskContext.risk_per_trade_pct`. V0.8 never aliases these fields. The committed paper model does not yet contain an authoritative stop-loss/risk-at-stop model or sufficient account baselines to derive every required V0.5 risk fact.
+
+Therefore missing risk facts are fail-closed for prospective paper entry. The dashboard reports execution permission as unavailable with an explicit reason such as `Awaiting authoritative risk context`; it does not substitute zero, a hard-coded percentage, or paper allocation and does not present the state as `ALLOW`.
+
+### Dashboard data behavior
+
+- Market, indicators, and strategy are fetched from backend API routes.
+- Paper account and realized paper performance are read-only dashboard data from the existing process-local backend session.
+- Loading or refreshing the dashboard does not start, process, or reset a paper session.
+- If no paper session exists, paper values are shown as not started/unavailable rather than fabricated zero balances or performance.
+- Paper performance is not recomputed in React.
+- The trade journal displays backend `closed_trades` only.
+- Backtest remains `NOT RUN` until an explicit backend-authoritative workflow supplies a real BacktestResult. No result is fabricated to fill the panel.
+- Backend domain failures are represented as unavailable/error states rather than zero-valued financial metrics.
+
+### V0.8 scope limits
+
+V0.8 does not add stop-loss placement, automatic position-risk derivation, live trading, broker execution, frontend trade accounting, a `/paper/step` shortcut, or fabricated daily-loss/drawdown baselines. These require separate design and regression tests.
+
+### Verification checkpoint
+
+The Phase 2 dashboard integration checkpoint was locally verified with:
+
+- backend regression suite: `102 passed`;
+- frontend production build: passed;
+- frontend lint: `0 warnings and 0 errors`;
+- `git diff --check`: passed;
+- clean working tree after pulling the branch.
+
+The single pytest warning at this checkpoint is an upstream Starlette/AnyIO deprecation warning and did not fail the suite.
+
 ## Current status
 
-This project currently provides the initial modular architecture, mock dashboard data, a simulated market data engine, deterministic indicator calculations, a read-only strategy scoring layer with EMA, RSI, and MACD evidence, a deterministic V0.6 backtest/performance evaluation engine, and a V0.7 in-memory paper trading engine. It deliberately does not include live trading, broker integration, order execution, AI-powered prediction, or credentialed access.
+TradingGuard currently provides a simulated market-data engine, deterministic indicator calculations, read-only strategy scoring, the V0.5 risk gate, V0.6 backtest/performance evaluation, V0.7 in-memory paper trading, and the V0.8 backend-authoritative dashboard integration described above.
+
+The current dashboard does not fabricate missing risk permission, paper balances, trade history, or backtest performance. TradingGuard still deliberately excludes live trading, broker integration, real order execution, AI-powered prediction, and credentialed market access.
