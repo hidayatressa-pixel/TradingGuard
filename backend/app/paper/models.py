@@ -31,7 +31,7 @@ class PaperTradingConfig(BaseModel):
 
 
 class PendingActionType(str, Enum): ENTRY="ENTRY"; EXIT="EXIT"
-class PaperExitReason(str, Enum): STRATEGY="STRATEGY"; STOP_LOSS="STOP_LOSS"
+class PaperExitReason(str, Enum): STRATEGY="STRATEGY"; STOP_LOSS="STOP_LOSS"; MANUAL="MANUAL"
 
 
 class PendingEntry(BaseModel):
@@ -51,12 +51,12 @@ class PendingExit(BaseModel):
 
 class PaperPosition(BaseModel):
     model_config=ConfigDict(strict=True)
-    symbol:str; timeframe:str; entry_signal_timestamp:datetime; entry_timestamp:datetime; entry_price:float; quantity:float; entry_notional:float; entry_transaction_cost:float; entry_assessment:str; cash_before_entry:float; cash_after_entry:float; stop_loss_price:float|None=None
+    symbol:str; timeframe:str; entry_signal_timestamp:datetime; entry_timestamp:datetime; entry_price:float; quantity:float; entry_notional:float; entry_transaction_cost:float; entry_assessment:str; cash_before_entry:float; cash_after_entry:float; stop_loss_price:float|None=None; entry_mode:str="AUTO"
 
 
 class PaperTrade(BaseModel):
     model_config=ConfigDict(strict=True)
-    symbol:str; timeframe:str; entry_signal_timestamp:datetime; entry_timestamp:datetime; entry_price:float; exit_signal_timestamp:datetime; exit_timestamp:datetime; exit_price:float; quantity:float; entry_notional:float; exit_notional:float; gross_pnl:float; entry_transaction_cost:float; exit_transaction_cost:float; transaction_cost:float; net_pnl:float; return_pct:float; equity_before:float; equity_after:float; entry_assessment:str; exit_assessment:str; exit_reason:PaperExitReason=PaperExitReason.STRATEGY
+    symbol:str; timeframe:str; entry_signal_timestamp:datetime; entry_timestamp:datetime; entry_price:float; exit_signal_timestamp:datetime; exit_timestamp:datetime; exit_price:float; quantity:float; entry_notional:float; exit_notional:float; gross_pnl:float; entry_transaction_cost:float; exit_transaction_cost:float; transaction_cost:float; net_pnl:float; return_pct:float; equity_before:float; equity_after:float; entry_assessment:str; exit_assessment:str; exit_reason:PaperExitReason=PaperExitReason.STRATEGY; entry_mode:str="AUTO"
 
 
 class PaperPerformanceSnapshot(BaseModel):
