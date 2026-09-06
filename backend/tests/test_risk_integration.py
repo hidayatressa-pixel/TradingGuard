@@ -55,7 +55,18 @@ def test_warning_does_not_establish_execution_permission() -> None:
 
 
 def test_block_does_not_establish_execution_permission() -> None:
-    result = ProspectiveRiskGateService().evaluate(strategy(), account(), sizing(1.5))
+    # No allocation cap here: the test must actually deliver >1% final risk
+    # to Risk Guard. With the normal 20% allocation cap and a 5% stop,
+    # final price-risk is capped at exactly 1%, which is WARNING by policy.
+    request = RiskSizingRequest(
+        equity=10_000.0,
+        entry_price=100.0,
+        stop_loss_price=95.0,
+        risk_budget_pct=1.5,
+        max_allocation_pct=None,
+    )
+    result = ProspectiveRiskGateService().evaluate(strategy(), account(), request)
+    assert result.sizing.risk_per_trade_pct == pytest.approx(1.5)
     assert result.risk is not None
     assert result.risk.decision == RiskDecision.BLOCK
     assert result.execution_permission_established is False
