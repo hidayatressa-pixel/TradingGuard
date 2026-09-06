@@ -6,8 +6,6 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.app.risk.models import RiskDecision
-
 
 class PaperTradingConfig(BaseModel):
     model_config = ConfigDict(strict=True)
@@ -33,10 +31,18 @@ class PaperTradingConfig(BaseModel):
 
 
 class PendingActionType(str, Enum): ENTRY="ENTRY"; EXIT="EXIT"
+class PaperExitReason(str, Enum): STRATEGY="STRATEGY"; STOP_LOSS="STOP_LOSS"
 
 
 class PendingEntry(BaseModel):
-    model_config=ConfigDict(strict=True); action:PendingActionType=PendingActionType.ENTRY; signal_timestamp:datetime; symbol:str; timeframe:str; assessment:str; execute_index:int
+    model_config=ConfigDict(strict=True)
+    action:PendingActionType=PendingActionType.ENTRY; signal_timestamp:datetime; symbol:str; timeframe:str; assessment:str; execute_index:int; stop_loss_price:float|None=None
+
+    @field_validator("stop_loss_price")
+    @classmethod
+    def validate_stop(cls,value:float|None)->float|None:
+        if value is not None and (not math.isfinite(value) or value<=0): raise ValueError("stop_loss_price must be finite and positive.")
+        return value
 
 
 class PendingExit(BaseModel):
@@ -45,12 +51,12 @@ class PendingExit(BaseModel):
 
 class PaperPosition(BaseModel):
     model_config=ConfigDict(strict=True)
-    symbol:str; timeframe:str; entry_signal_timestamp:datetime; entry_timestamp:datetime; entry_price:float; quantity:float; entry_notional:float; entry_transaction_cost:float; entry_assessment:str; cash_before_entry:float; cash_after_entry:float
+    symbol:str; timeframe:str; entry_signal_timestamp:datetime; entry_timestamp:datetime; entry_price:float; quantity:float; entry_notional:float; entry_transaction_cost:float; entry_assessment:str; cash_before_entry:float; cash_after_entry:float; stop_loss_price:float|None=None
 
 
 class PaperTrade(BaseModel):
     model_config=ConfigDict(strict=True)
-    symbol:str; timeframe:str; entry_signal_timestamp:datetime; entry_timestamp:datetime; entry_price:float; exit_signal_timestamp:datetime; exit_timestamp:datetime; exit_price:float; quantity:float; entry_notional:float; exit_notional:float; gross_pnl:float; entry_transaction_cost:float; exit_transaction_cost:float; transaction_cost:float; net_pnl:float; return_pct:float; equity_before:float; equity_after:float; entry_assessment:str; exit_assessment:str
+    symbol:str; timeframe:str; entry_signal_timestamp:datetime; entry_timestamp:datetime; entry_price:float; exit_signal_timestamp:datetime; exit_timestamp:datetime; exit_price:float; quantity:float; entry_notional:float; exit_notional:float; gross_pnl:float; entry_transaction_cost:float; exit_transaction_cost:float; transaction_cost:float; net_pnl:float; return_pct:float; equity_before:float; equity_after:float; entry_assessment:str; exit_assessment:str; exit_reason:PaperExitReason=PaperExitReason.STRATEGY
 
 
 class PaperPerformanceSnapshot(BaseModel):
@@ -60,10 +66,7 @@ class PaperPerformanceSnapshot(BaseModel):
 
 class PaperAccount(BaseModel):
     model_config=ConfigDict(strict=True)
-    config:PaperTradingConfig; active:bool=False; initial_capital:float; cash:float; realized_equity:float
-    peak_realized_equity:float
-    day_start_equity:float
-    risk_day:str|None=None
+    config:PaperTradingConfig; active:bool=False; initial_capital:float; cash:float; realized_equity:float; peak_realized_equity:float; day_start_equity:float; risk_day:str|None=None
     open_position:PaperPosition|None=None; closed_trades:list[PaperTrade]=Field(default_factory=list); total_transaction_cost:float=0.0; pending_entry:PendingEntry|None=None; pending_exit:PendingExit|None=None; last_event_timestamp:datetime|None=None; event_index:int=0
 
     @model_validator(mode="after")
