@@ -14,9 +14,7 @@ export function useLiveMarket(source: MarketSource, symbol: string): LiveMarketS
   const [state, setState] = useState<LiveMarketState>(initialState)
 
   useEffect(() => {
-    if (source !== 'binance') {
-      return
-    }
+    if (source !== 'binance') return
 
     let active = true
     let reconnectTimer: number | undefined
@@ -27,7 +25,7 @@ export function useLiveMarket(source: MarketSource, symbol: string): LiveMarketS
       socket = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@trade`)
 
       socket.onopen = () => {
-        if (active) setState(value => ({ ...value, connected: true, error: null }))
+        if (active) setState({ price: null, eventTime: null, connected: true, error: null })
       }
       socket.onmessage = event => {
         if (!active) return
@@ -51,7 +49,6 @@ export function useLiveMarket(source: MarketSource, symbol: string): LiveMarketS
       }
     }
 
-    setState(initialState)
     connect()
     return () => {
       active = false
@@ -60,5 +57,6 @@ export function useLiveMarket(source: MarketSource, symbol: string): LiveMarketS
     }
   }, [source, symbol])
 
+  if (source !== 'binance') return initialState
   return state
 }
