@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -43,15 +44,15 @@ class Candle(BaseModel):
     @field_validator("open", "high", "low", "close")
     @classmethod
     def validate_price_fields(cls, value: float) -> float:
-        if value <= 0:
-            raise ValueError("prices must be positive.")
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("prices must be finite and positive.")
         return float(value)
 
     @field_validator("volume")
     @classmethod
     def validate_volume(cls, value: float) -> float:
-        if value < 0:
-            raise ValueError("volume must be greater than or equal to zero.")
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("volume must be finite and greater than or equal to zero.")
         return float(value)
 
     @model_validator(mode="after")
