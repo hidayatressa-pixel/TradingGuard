@@ -16,6 +16,7 @@ class AutoPaperCycleResult(BaseModel):
     model_config = ConfigDict(strict=True)
     strategy: StrategyResult
     entry: AutoPaperEntryResult | None
+    authorization: AutoPaperEntryResult | None = None
     account: PaperAccount
     reason: str
 
@@ -27,6 +28,9 @@ class AutoPaperLoopService:
         self.indicators = IndicatorService()
         self.strategy = StrategyService()
         self.orchestrator = AutoPaperEntryOrchestrator(paper_service)
+        # Audit snapshot of the latest explicit entry-gate result. It is presentation/audit
+        # state only: execution still depends exclusively on PaperTradingService interlocks.
+        self.last_authorization: AutoPaperEntryResult | None = None
 
     def cycle(self, candles: list[Candle], *, risk_budget_pct: float = 0.5,
               max_allocation_pct: float | None = 20.0,
@@ -34,8 +38,6 @@ class AutoPaperLoopService:
         if len(candles) < 2:
             raise ValueError("Auto Paper cycle requires at least one completed candle plus the current market candle.")
 
-        # Public kline feeds include the currently forming candle. Never make an autonomous
-        # decision from that mutable candle: the completed prefix is the authoritative event set.
         completed = candles[:-1]
         results = self.strategy.build_results(self.indicators.build_snapshots(completed))
         if not results:
@@ -44,38 +46,42 @@ class AutoPaperLoopService:
         candle = completed[-1]
         account = self.paper_service.state()
         if not account.active or not account.config.paper_trading_enabled:
+            self.last_authorization = None
             raise ValueError("Paper trading is inactive; autonomous cycle remains fail-closed.")
 
-        # Paper start previously left risk_day=None. That made the first prospective RiskContext
-        # incomplete and could keep every autonomous BUY blocked before Risk Guard had a fair gate.
         self.paper_service.prepare_risk_day(candle.timestamp)
         account = self.paper_service.state()
 
         if account.last_event_timestamp is not None and candle.timestamp <= account.last_event_timestamp:
-            return AutoPaperCycleResult(strategy=current, entry=None, account=account,
+            return AutoPaperCycleResult(strategy=current, entry=None, authorization=self.last_authorization,
+                                        account=account,
                                         reason="Completed candle already processed; waiting for the next completed candle.")
 
         entry = None
-        if account.open_position is None and account.pending_entry is None and account.pending_exit is None:
-            if current.data_ready and current.assessment in {Assessment.BULLISH, Assessment.STRONG_BULLISH}:
-                entry = self.orchestrator.evaluate_and_schedule_auto(
-                    strategy=current, candles=completed, risk_budget_pct=risk_budget_pct,
-                    max_allocation_pct=max_allocation_pct, policy=policy,
-                )
+        flat = account.open_position is None and account.pending_entry is None and account.pending_exit is None
+        eligible = current.data_ready and current.assessment in {Assessment.BULLISH, Assessment.STRONG_BULLISH}
+        if flat and eligible:
+            # Every eligible flat setup must reach an explicit gate result. WAIT is never used as
+            # a substitute for Risk Guard evaluation once authoritative bullish data is available.
+            entry = self.orchestrator.evaluate_and_schedule_auto(
+                strategy=current, candles=completed, risk_budget_pct=risk_budget_pct,
+                max_allocation_pct=max_allocation_pct, policy=policy,
+            )
+            self.last_authorization = entry
 
-        # Consume the signal candle after scheduling. event_index advances once here, making the
-        # sized BUY due on the next completed candle, where execution risk is freshly revalidated.
         self.paper_service.process_auto_candle(candle, current, execution_policy=policy)
         account = self.paper_service.state()
 
         if entry is not None:
-            return AutoPaperCycleResult(strategy=current, entry=entry, account=account, reason=entry.reason)
+            return AutoPaperCycleResult(strategy=current, entry=entry, authorization=self.last_authorization,
+                                        account=account, reason=entry.reason)
         if account.open_position is not None:
-            reason = "PAPER position is active; autonomous stop/exit monitoring continues."
+            reason = "PAPER position is active; entry authorization is preserved and stop/exit monitoring continues."
         elif account.pending_entry is not None:
             reason = "Sized PAPER BUY is pending next-completed-candle execution revalidation."
-        elif current.data_ready and current.assessment in {Assessment.BULLISH, Assessment.STRONG_BULLISH}:
+        elif eligible:
             reason = "Bullish setup was evaluated but no new entry is currently schedulable."
         else:
             reason = "Strategy interlock is not bullish; no new PAPER entry considered."
-        return AutoPaperCycleResult(strategy=current, entry=None, account=account, reason=reason)
+        return AutoPaperCycleResult(strategy=current, entry=None, authorization=self.last_authorization,
+                                    account=account, reason=reason)
