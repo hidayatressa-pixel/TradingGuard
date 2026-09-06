@@ -12,6 +12,7 @@ from backend.app.market.data_provider import BinancePublicMarketDataProvider, Ma
 from backend.app.market.models import Candle
 from backend.app.market.validation import validate_candle_dataset
 from backend.app.paper.models import PaperAccount, PaperPerformanceSnapshot, PaperTradingConfig
+from backend.app.paper.orchestration import AutoPaperEntryOrchestrator, AutoPaperEntryResult
 from backend.app.paper.service import PaperTradingService
 from backend.app.risk.context import PaperRiskContextBuilder, RiskContextAvailability
 from backend.app.risk.models import RiskContext, RiskPolicy, RiskResult
@@ -68,6 +69,16 @@ class PaperProcessRequest(BaseModel):
     risk: dict
 
 
+class AutoPaperEntryRequest(BaseModel):
+    model_config = ConfigDict()
+    strategy: StrategyResultInput
+    reference_entry_price: float
+    stop_loss_price: float
+    risk_budget_pct: float
+    max_allocation_pct: float | None = None
+    policy: dict | None = None
+
+
 app = FastAPI(title="TradingGuard", version="0.9.0-dev")
 app.add_middleware(
     CORSMiddleware,
@@ -85,6 +96,7 @@ risk_sizing_service = RiskSizingService()
 risk_context_builder = PaperRiskContextBuilder()
 backtest_service = BacktestService()
 paper_service = PaperTradingService()
+auto_paper_orchestrator = AutoPaperEntryOrchestrator(paper_service)
 
 
 def _provider(source: str) -> MarketDataProvider:
@@ -177,6 +189,24 @@ def start_paper(payload: dict|None=Body(default=None))->PaperAccount:
     try:
         request=PaperStartRequest.model_validate(payload or {}); return paper_service.start(PaperTradingConfig.model_validate(request.config or {}))
     except (KeyError,ValueError,TypeError) as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
+
+
+@app.post("/paper/auto-entry", response_model=AutoPaperEntryResult)
+def auto_paper_entry(payload: dict=Body(...)) -> AutoPaperEntryResult:
+    try:
+        request=AutoPaperEntryRequest.model_validate(payload)
+        strategy=_parse_strategy(request.strategy.model_dump())
+        policy=RiskPolicy.model_validate(request.policy or {})
+        return auto_paper_orchestrator.evaluate_and_schedule(
+            strategy=strategy,
+            reference_entry_price=request.reference_entry_price,
+            stop_loss_price=request.stop_loss_price,
+            risk_budget_pct=request.risk_budget_pct,
+            max_allocation_pct=request.max_allocation_pct,
+            policy=policy,
+        )
+    except (KeyError,ValueError,TypeError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc)) from exc
 
 
 @app.post("/paper/process",response_model=PaperAccount)
