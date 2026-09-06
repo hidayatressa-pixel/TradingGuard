@@ -1,0 +1,277 @@
+export type Timestamp = string
+
+export interface HealthResponse {
+  status: string
+  service: string
+  message: string
+}
+
+export interface Candle {
+  timestamp: Timestamp
+  symbol: string
+  timeframe: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface IndicatorSnapshot {
+  timestamp: Timestamp
+  symbol: string
+  timeframe: string
+  close: number
+  ema_fast: number | null
+  ema_slow: number | null
+  rsi: number | null
+  macd: number | null
+  macd_signal: number | null
+  macd_histogram: number | null
+}
+
+export type Assessment =
+  | 'STRONG_BEARISH'
+  | 'BEARISH'
+  | 'NEUTRAL'
+  | 'BULLISH'
+  | 'STRONG_BULLISH'
+  | 'INSUFFICIENT_DATA'
+
+export interface StrategyEvidence {
+  indicator: string
+  condition: string
+  contribution: number
+  description: string
+}
+
+export interface StrategyResult {
+  timestamp: Timestamp
+  symbol: string
+  timeframe: string
+  score: number
+  normalized_score: number
+  assessment: Assessment
+  data_ready: boolean
+  evidence: StrategyEvidence[]
+}
+
+export type RiskDecision = 'ALLOW' | 'WARNING' | 'BLOCK'
+export type RiskStatus = 'PASS' | 'WARNING' | 'BLOCK'
+
+export interface RiskEvidence {
+  rule: string
+  status: RiskStatus
+  value: number | boolean
+  threshold: number | boolean | null
+  description: string
+}
+
+export interface RiskPolicy {
+  max_risk_per_trade_pct?: number
+  warning_risk_per_trade_pct?: number
+  max_daily_loss_pct?: number
+  warning_daily_loss_pct?: number
+  max_total_exposure_pct?: number
+  warning_total_exposure_pct?: number
+  max_open_positions?: number
+  warning_open_positions?: number
+  max_drawdown_pct?: number
+  warning_drawdown_pct?: number
+}
+
+export interface RiskContext {
+  risk_per_trade_pct: number
+  daily_loss_pct: number
+  total_exposure_pct: number
+  open_positions: number
+  current_drawdown_pct: number
+  trading_enabled?: boolean
+}
+
+export interface RiskEvaluateRequest {
+  strategy: StrategyResult
+  context: RiskContext
+  policy?: RiskPolicy
+}
+
+export interface RiskResult {
+  timestamp: Timestamp
+  symbol: string
+  timeframe: string
+  strategy_assessment: string
+  strategy_score: number
+  decision: RiskDecision
+  data_ready: boolean
+  evidence: RiskEvidence[]
+  block_reasons: string[]
+  warning_reasons: string[]
+}
+
+export interface PaperTradingConfig {
+  initial_capital?: number
+  position_size_pct?: number
+  transaction_cost_pct?: number
+  slippage_pct?: number
+  paper_trading_enabled?: boolean
+}
+
+export type PendingActionType = 'ENTRY' | 'EXIT'
+
+export interface PendingAction {
+  action: PendingActionType
+  signal_timestamp: Timestamp
+  symbol: string
+  timeframe: string
+  assessment: string
+  execute_index: number
+}
+
+export interface PaperPosition {
+  symbol: string
+  timeframe: string
+  entry_signal_timestamp: Timestamp
+  entry_timestamp: Timestamp
+  entry_price: number
+  quantity: number
+  entry_notional: number
+  entry_transaction_cost: number
+  entry_assessment: string
+  cash_before_entry: number
+  cash_after_entry: number
+}
+
+export interface PaperTrade {
+  symbol: string
+  timeframe: string
+  entry_signal_timestamp: Timestamp
+  entry_timestamp: Timestamp
+  entry_price: number
+  exit_signal_timestamp: Timestamp
+  exit_timestamp: Timestamp
+  exit_price: number
+  quantity: number
+  entry_notional: number
+  exit_notional: number
+  gross_pnl: number
+  entry_transaction_cost: number
+  exit_transaction_cost: number
+  transaction_cost: number
+  net_pnl: number
+  return_pct: number
+  equity_before: number
+  equity_after: number
+  entry_assessment: string
+  exit_assessment: string
+}
+
+export interface PaperPerformanceSnapshot {
+  initial_capital: number
+  realized_equity: number
+  realized_net_profit: number
+  realized_return_pct: number
+  total_closed_trades: number
+  winning_trades: number
+  losing_trades: number
+  breakeven_trades: number
+  win_rate_pct: number
+  gross_profit: number
+  gross_loss: number
+  profit_factor: number | null
+  average_trade_pnl: number
+  expected_value: number
+  total_transaction_cost: number
+  open_position: PaperPosition | null
+  pending_action: PendingAction | null
+}
+
+export interface PaperAccount {
+  config: Required<PaperTradingConfig>
+  active: boolean
+  initial_capital: number
+  cash: number
+  realized_equity: number
+  open_position: PaperPosition | null
+  closed_trades: PaperTrade[]
+  total_transaction_cost: number
+  pending_entry: PendingAction | null
+  pending_exit: PendingAction | null
+  last_event_timestamp: Timestamp | null
+  event_index: number
+}
+
+export interface PaperStartRequest {
+  config?: PaperTradingConfig
+}
+
+export interface PaperProcessRequest {
+  candle: Candle
+  strategy: StrategyResult
+  risk: RiskResult
+}
+
+export interface BacktestConfig {
+  initial_capital?: number
+  position_size_pct?: number
+  transaction_cost_pct?: number
+  slippage_pct?: number
+}
+
+export interface EquityCurvePoint {
+  timestamp: Timestamp
+  equity: number
+}
+
+export interface BacktestTrade {
+  entry_signal_timestamp: Timestamp
+  entry_timestamp: Timestamp
+  entry_price: number
+  exit_signal_timestamp: Timestamp
+  exit_timestamp: Timestamp
+  exit_price: number
+  quantity: number
+  gross_pnl: number
+  entry_transaction_cost: number
+  exit_transaction_cost: number
+  transaction_cost: number
+  net_pnl: number
+  return_pct: number
+  equity_before: number
+  equity_after: number
+  entry_assessment: string
+  exit_assessment: string
+  forced_exit: boolean
+}
+
+export interface BacktestResult {
+  symbol: string
+  timeframe: string
+  initial_capital: number
+  final_equity: number
+  net_profit: number
+  total_return_pct: number
+  total_trades: number
+  winning_trades: number
+  losing_trades: number
+  breakeven_trades: number
+  win_rate_pct: number
+  gross_profit: number
+  gross_loss: number
+  profit_factor: number | null
+  average_trade_pnl: number
+  average_win: number
+  average_loss: number
+  expected_value: number
+  max_drawdown_pct: number
+  largest_win: number
+  largest_loss: number
+  total_transaction_cost: number
+  trades: BacktestTrade[]
+  equity_curve: EquityCurvePoint[]
+}
+
+export interface BacktestEvaluateRequest {
+  candles: Candle[]
+  strategy_results: StrategyResult[]
+  config?: BacktestConfig
+}
