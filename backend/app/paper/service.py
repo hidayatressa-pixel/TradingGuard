@@ -42,9 +42,24 @@ class PaperTradingService:
         if account.open_position is not None or account.pending_exit is not None: account.pending_entry=None; return
         effective_price=float(candle.open)*(1.0+account.config.slippage_pct/100.0)
         if pending.stop_loss_price is not None and pending.stop_loss_price>=effective_price: raise ValueError("Paper stop-loss must remain below the effective long entry price.")
-        target_allocation=account.realized_equity*(account.config.position_size_pct/100.0); fee_rate=account.config.transaction_cost_pct/100.0; quantity=target_allocation/(effective_price*(1.0+fee_rate)); entry_notional=quantity*effective_price; entry_fee=entry_notional*fee_rate; total_outflow=entry_notional+entry_fee
-        if quantity<=0 or total_outflow>account.cash+1e-9: raise ValueError("Paper entry would exceed available cash.")
+        fee_rate=account.config.transaction_cost_pct/100.0
+        if pending.quantity is None:
+            target_allocation=account.realized_equity*(account.config.position_size_pct/100.0); quantity=target_allocation/(effective_price*(1.0+fee_rate))
+        else:
+            quantity=pending.quantity
+        entry_notional=quantity*effective_price; entry_fee=entry_notional*fee_rate; total_outflow=entry_notional+entry_fee
+        if quantity<=0 or total_outflow>account.cash+1e-9: raise ValueError("Paper entry would exceed available cash; authoritative quantity will not be silently resized.")
         cash_before=account.cash; account.cash=max(account.cash-total_outflow,0.0); account.open_position=PaperPosition(symbol=pending.symbol,timeframe=pending.timeframe,entry_signal_timestamp=pending.signal_timestamp,entry_timestamp=candle.timestamp,entry_price=effective_price,quantity=quantity,entry_notional=entry_notional,entry_transaction_cost=entry_fee,entry_assessment=pending.assessment,cash_before_entry=cash_before,cash_after_entry=account.cash,stop_loss_price=pending.stop_loss_price); account.total_transaction_cost+=entry_fee; account.pending_entry=None
+
+    def schedule_sized_entry(self,*,strategy:StrategyResult,risk:RiskResult,quantity:float,stop_loss_price:float,expected_equity:float)->PaperAccount:
+        account=self.state()
+        if not account.active or not account.config.paper_trading_enabled: raise ValueError("Paper trading is not enabled; sized entry remains fail-closed.")
+        if account.open_position is not None or account.pending_entry is not None or account.pending_exit is not None: raise ValueError("Paper account is not flat; sized entry remains fail-closed.")
+        if risk.decision!=RiskDecision.ALLOW: raise ValueError("Risk Guard ALLOW is required for a sized paper entry.")
+        if not strategy.data_ready or strategy.assessment not in {Assessment.BULLISH,Assessment.STRONG_BULLISH}: raise ValueError("Eligible bullish strategy data is required for a sized paper entry.")
+        if abs(expected_equity-account.realized_equity)>max(1e-9,abs(account.realized_equity)*1e-9): raise ValueError("Risk sizing equity is stale or does not match authoritative paper equity.")
+        pending=PendingEntry(signal_timestamp=strategy.timestamp,symbol=strategy.symbol,timeframe=strategy.timeframe,assessment=strategy.assessment.value,execute_index=account.event_index+1,stop_loss_price=stop_loss_price,quantity=quantity)
+        account.pending_entry=pending; return account
 
     def _close_position(self,*,timestamp:datetime,effective_price:float,exit_signal_timestamp:datetime,exit_assessment:str,exit_reason:PaperExitReason)->None:
         account=self.state(); position=account.open_position
@@ -55,8 +70,7 @@ class PaperTradingService:
 
     def _execute_exit(self,candle:Candle,pending:PendingExit)->None:
         if self.state().open_position is None: self.state().pending_exit=None; return
-        effective_price=float(candle.open)*(1.0-self.state().config.slippage_pct/100.0)
-        self._close_position(timestamp=candle.timestamp,effective_price=effective_price,exit_signal_timestamp=pending.signal_timestamp,exit_assessment=pending.assessment,exit_reason=PaperExitReason.STRATEGY)
+        effective_price=float(candle.open)*(1.0-self.state().config.slippage_pct/100.0); self._close_position(timestamp=candle.timestamp,effective_price=effective_price,exit_signal_timestamp=pending.signal_timestamp,exit_assessment=pending.assessment,exit_reason=PaperExitReason.STRATEGY)
 
     def _execute_stop_if_triggered(self,candle:Candle)->bool:
         account=self.state(); position=account.open_position
@@ -65,13 +79,10 @@ class PaperTradingService:
         if float(candle.open)<=stop: base_fill=float(candle.open)
         elif float(candle.low)<=stop: base_fill=stop
         else: return False
-        effective_price=base_fill*(1.0-account.config.slippage_pct/100.0)
-        self._close_position(timestamp=candle.timestamp,effective_price=effective_price,exit_signal_timestamp=candle.timestamp,exit_assessment="STOP_LOSS",exit_reason=PaperExitReason.STOP_LOSS)
-        return True
+        effective_price=base_fill*(1.0-account.config.slippage_pct/100.0); self._close_position(timestamp=candle.timestamp,effective_price=effective_price,exit_signal_timestamp=candle.timestamp,exit_assessment="STOP_LOSS",exit_reason=PaperExitReason.STOP_LOSS); return True
 
     def process_candle(self,candle:Candle,strategy:StrategyResult,risk:RiskResult,stop_loss_price:float|None=None)->PaperAccount:
-        account=self.state(); self._validate_event(candle,strategy,risk); self._roll_risk_day(candle.timestamp); current_index=account.event_index
-        position_at_candle_start=account.open_position is not None
+        account=self.state(); self._validate_event(candle,strategy,risk); self._roll_risk_day(candle.timestamp); current_index=account.event_index; position_at_candle_start=account.open_position is not None
         if not account.config.paper_trading_enabled: account.pending_entry=None
         if account.pending_entry is not None and account.pending_entry.execute_index==current_index: self._execute_entry(candle,account.pending_entry)
         if account.pending_exit is not None and account.pending_exit.execute_index==current_index: self._execute_exit(candle,account.pending_exit)
