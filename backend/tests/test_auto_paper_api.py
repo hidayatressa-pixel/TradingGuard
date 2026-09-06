@@ -54,15 +54,15 @@ def risk_result(decision: RiskDecision) -> RiskResult:
 
 def sizing(risk_pct: float) -> RiskSizingResult:
     return RiskSizingResult(
-        equity=10000.0, reference_entry_price=100.0, stop_loss_price=95.0,
-        requested_risk_budget_pct=risk_pct, requested_risk_budget_amount=10000.0 * risk_pct / 100.0,
+        equity=10000.0, entry_price=100.0, stop_loss_price=95.0,
         stop_distance=5.0, stop_distance_pct=5.0,
-        quantity_by_risk=10.0, notional_by_risk=1000.0,
-        max_allocation_pct=20.0, max_allocation_amount=2000.0,
-        quantity_by_allocation=20.0, allocation_cap_applied=False,
-        final_quantity=10.0, final_notional=1000.0,
-        risk_amount=50.0, risk_per_trade_pct=risk_pct, allocation_pct=10.0,
-        costs_included_in_risk=False, cost_treatment="excluded",
+        requested_risk_budget_pct=risk_pct,
+        requested_risk_budget_amount=10000.0 * risk_pct / 100.0,
+        max_allocation_pct=20.0, quantity_by_risk=10.0,
+        notional_by_risk=1000.0, final_quantity=10.0,
+        final_notional=1000.0, risk_amount=50.0,
+        risk_per_trade_pct=risk_pct, allocation_pct=10.0,
+        allocation_cap_applied=False,
     )
 
 
