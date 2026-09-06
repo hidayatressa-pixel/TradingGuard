@@ -13,6 +13,8 @@ import type {
   StrategyResult,
 } from './types'
 
+export type MarketSource = 'mock' | 'binance'
+
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '')
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -55,14 +57,14 @@ function jsonRequest(method: 'POST', body: unknown): RequestInit {
 export const tradingGuardApi = {
   getHealth: () => request<HealthResponse>('/health'),
 
-  getMarketCandles: (symbol: string, timeframe: string, limit = 100) =>
-    request<Candle[]>(query('/market/candles', { symbol, timeframe, limit })),
+  getMarketCandles: (symbol: string, timeframe: string, limit = 100, source: MarketSource = 'mock') =>
+    request<Candle[]>(query('/market/candles', { symbol, timeframe, limit, source })),
 
-  getIndicators: (symbol: string, timeframe: string, limit = 100) =>
-    request<IndicatorSnapshot[]>(query('/indicators', { symbol, timeframe, limit })),
+  getIndicators: (symbol: string, timeframe: string, limit = 100, source: MarketSource = 'mock') =>
+    request<IndicatorSnapshot[]>(query('/indicators', { symbol, timeframe, limit, source })),
 
-  getStrategy: (symbol: string, timeframe: string, limit = 100) =>
-    request<StrategyResult[]>(query('/strategy', { symbol, timeframe, limit })),
+  getStrategy: (symbol: string, timeframe: string, limit = 100, source: MarketSource = 'mock') =>
+    request<StrategyResult[]>(query('/strategy', { symbol, timeframe, limit, source })),
 
   evaluateRisk: (payload: RiskEvaluateRequest) =>
     request<RiskResult>('/risk/evaluate', jsonRequest('POST', payload)),
