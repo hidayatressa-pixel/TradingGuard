@@ -1,4 +1,5 @@
 from datetime import datetime
+import os
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,8 +37,13 @@ class PaperStartRequest(BaseModel):
 class PaperProcessRequest(BaseModel):
     model_config=ConfigDict(); candle:dict; strategy:dict; risk:dict
 
+def _cors_origins()->list[str]:
+    configured=os.getenv('CORS_ORIGINS','')
+    origins=[origin.strip().rstrip('/') for origin in configured.split(',') if origin.strip()]
+    return origins or ['http://localhost:5173','http://127.0.0.1:5173']
+
 app=FastAPI(title='TradingGuard',version='0.9.0-dev')
-app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:5173','http://127.0.0.1:5173'],allow_credentials=False,allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Accept'])
+app.add_middleware(CORSMiddleware,allow_origins=_cors_origins(),allow_credentials=False,allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Accept'])
 mock_provider=MockMarketDataProvider(); real_provider=BinancePublicMarketDataProvider(); indicator_service=IndicatorService(); strategy_service=StrategyService(); risk_service=RiskService(); risk_sizing_service=RiskSizingService(); risk_context_builder=PaperRiskContextBuilder(); backtest_service=BacktestService(); paper_service=PaperTradingService(); auto_paper_loop=AutoPaperLoopService(paper_service); manual_trade_service=ManualGuardedTradeService(paper_service)
 
 def _provider(source:str)->MarketDataProvider:
