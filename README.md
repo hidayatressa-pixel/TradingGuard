@@ -1,260 +1,150 @@
 # TradingGuard
 
-TradingGuard is a personal trading decision-support and risk-management application designed to evaluate market conditions without assuming future market movements can be predicted with certainty.
+TradingGuard is a personal trading decision-support and risk-management application. The project is being validated in PAPER mode before any autonomous or broker-connected phase is considered.
 
-## Architecture overview
+## Current operating mode
 
-- Market data ingestion
-- Technical indicator calculation
-- Signal scoring and strategy evaluation
-- Risk engine
-- Paper trading workflow
-- Performance evaluation and backtesting
-- V0.8 backend-authoritative dashboard integration
+The active validation path is intentionally **MANUAL + GUARD**:
 
-The architecture is intentionally modular so that each component can be tested independently and evolved without introducing live trading behavior prematurely.
+`Manual BUY intent → Auto Stop Loss → Risk Sizing → Risk Guard → ALLOW = paper execution`
 
-## Market Data Engine
+Any result that is not `ALLOW` must not authorize a BUY. Strategy score and market condition remain useful context, but they do not independently authorize manual execution.
 
-The market data layer follows a provider-agnostic pattern:
+The purpose of this phase is to measure whether Risk Guard improves trading quality instead of merely reducing activity. Future evaluation should compare allowed and blocked opportunities using metrics such as loss avoided, false block / missed profit, expectancy, drawdown, profit factor, net P/L, and opportunity capture.
 
-MarketDataProvider
-        ↓
-MockMarketDataProvider
-        ↓
-Normalized OHLCV candles
-        ↓
-Technical indicators
+## Safety boundary
 
-This engine is designed to return normalized OHLCV data with consistent fields such as timestamp, symbol, timeframe, open, high, low, close, and volume. The current implementation uses simulated candle data only and must not be treated as real market information.
+- PAPER trading only.
+- No live broker/exchange execution.
+- No real-money movement.
+- No broker credentials are required by the active workflow.
+- Broker credentials, if introduced in a future approved phase, must remain backend-only.
+- Autonomous paper code may exist as a future/tested capability, but autonomous entry is not the active UI workflow during Manual + Guard validation.
+- `ALLOW` is permission to execute a paper action, not a guarantee that the trade will be profitable.
 
-> The mock candle data in this phase is intentionally deterministic and offline. It is for development, local testing, and future indicator work only.
+## Architecture
+
+Core modules are separated so they can be audited and tested independently:
+
+`Market Data → Indicators → Strategy / Signal Score → Auto Stop → Risk Sizing → Risk Guard → Paper Trading → Performance Evaluation`
+
+The frontend is a presentation/client layer. Trading decisions, risk calculations, paper accounting, and market-domain rules belong to the backend rather than being duplicated in React.
 
 ## Backend
 
-The backend is a FastAPI service that exposes the application API and keeps future broker credentials on the server side only.
+The backend uses FastAPI.
 
-### Run the backend
+### Run locally
 
-1. Create and activate a virtual environment:
-   - Windows PowerShell:
-     - `python -m venv .venv`
-     - `.venv\Scripts\Activate.ps1`
-   - macOS/Linux:
-     - `python -m venv .venv`
-     - `source .venv/bin/activate`
+1. Create and activate a virtual environment.
 2. Install dependencies:
    - `pip install -r requirements.txt`
 3. Start the API:
    - `uvicorn backend.app.main:app --reload`
-4. Confirm the health route:
+4. Check:
    - `http://127.0.0.1:8000/health`
 
-### Backend modules
+Important backend areas include:
 
-- `backend/app/market` for market data access and normalized OHLCV candles
-- `backend/app/indicators` for technical indicators
-- `backend/app/strategy` for signal scoring and strategy logic
-- `backend/app/risk` for risk management
-- `backend/app/broker` for eventual broker integration placeholders only
-- `backend/app/backtest` for historical simulation and evaluation
-- `backend/app/paper` for process-local virtual paper trading
+- `backend/app/market` — market data and normalized OHLCV candles
+- `backend/app/indicators` — EMA, RSI, MACD and related calculations
+- `backend/app/strategy` — deterministic signal scoring
+- `backend/app/risk` — authoritative risk decisions
+- `backend/app/backtest` — historical simulation/evaluation
+- `backend/app/paper` — virtual paper account and execution workflow
+- `backend/app/broker` — future broker boundary/placeholders only; not an active live-money path
 
 ## Frontend
 
-The frontend is built with React, TypeScript, and Vite. In V0.8 it is a presentation/client layer: market, indicator, and strategy values are loaded from the FastAPI backend, while paper account/performance data is read from the existing backend session when available.
+The frontend uses React, TypeScript, and Vite.
 
-The frontend must not become a second trading engine. It does not generate candles, calculate strategy or risk decisions, fabricate account values, or perform trade accounting.
+### Run locally
 
-### Run the frontend
+1. `cd frontend`
+2. `npm install`
+3. `npm run dev`
 
-1. Open a terminal in `frontend/`
-2. Install dependencies:
-   - `npm install`
-3. Start the dev server:
-   - `npm run dev`
-4. Open the local Vite URL shown in the terminal.
+The backend base URL can be selected with `VITE_API_URL`. When it is absent, the frontend uses the local development backend.
 
-`VITE_API_URL` may be used to select the backend API base URL. If it is absent, the frontend uses `http://localhost:8000`.
-
-## Security notes
-
-- Broker API keys are never exposed to the React frontend.
-- Broker credentials belong only in backend-controlled environment settings.
-- No live order execution or broker automation is included in the current architecture.
-- No API keys or secrets are required for the current market data mock layer.
-
-## Technical Indicators Engine
-
-The indicator layer consumes the normalized market-data candles and produces mathematical transformations without creating trading decisions.
-
-Market Data
-    ↓
-Indicators
-    ↓
-Strategy / Signal Score
-    ↓
-Risk Engine
-    ↓
-Paper Trading
-
-### EMA
-
-The EMA implementation uses a standard multiplier of $2 / (period + 1)$ and seeds the first valid EMA with the SMA of the first `period` values. Warm-up positions remain `None` until the seed is available.
-
-### RSI
-
-The RSI implementation uses Wilder-style smoothing with a documented flat-market behavior: when both average gain and average loss are zero, the RSI resolves to `50`. This keeps the neutral case explicit and deterministic. The RSI stays within the 0 to 100 range for valid inputs and uses warm-up placeholders until enough data exists.
-
-### MACD
-
-The MACD implementation uses the EMA layer for the fast and slow components, then derives the signal line from the MACD values and the histogram as `MACD - Signal`. Default periods are fast = 12, slow = 26, and signal = 9. Warm-up values remain `None` until the required EMA windows are valid.
+The dashboard must not fabricate missing balances, risk permission, trade history, or performance values. Backend unavailable/error states should remain explicit.
 
 ## Strategy / Signal Score
 
-The strategy layer is a read-only assessment layer. It evaluates indicator snapshots for evidence, produces a deterministic raw score, and records which conditions contributed to that score. It does not buy, sell, place orders, or authorize execution.
+Strategy is a descriptive assessment layer, not execution authority.
 
-### Scoring rules
+Current evidence contributions are deterministic:
 
-- EMA
-  - bullish: +2 when `ema_fast > ema_slow`
-  - neutral: 0 when `ema_fast == ema_slow`
-  - bearish: -2 when `ema_fast < ema_slow`
-- RSI
-  - overbought: -1 when `rsi >= 70`
-  - oversold: +1 when `rsi <= 30`
-  - neutral: 0 when `30 < rsi < 70`
-- MACD
-  - bullish: +2 when `macd > macd_signal`
-  - neutral: 0 when `macd == macd_signal`
-  - bearish: -2 when `macd < macd_signal`
+- EMA: bullish `+2`, neutral `0`, bearish `-2`
+- RSI: overbought `-1`, oversold `+1`, otherwise `0`
+- MACD: bullish `+2`, neutral `0`, bearish `-2`
 
-The raw score is the sum of all evidence contributions and stays within the range of -5 to +5.
+Raw score range is `-5` through `+5`. The normalized score is descriptive and is **not a probability**.
 
-### Normalized score
+Assessment thresholds:
 
-- `-5` maps to `0`
-- `0` maps to `50`
-- `+5` maps to `100`
-- intermediate scores are linearly mapped within that range
+- `<= -4`: `STRONG_BEARISH`
+- `-3 .. -2`: `BEARISH`
+- `-1 .. +1`: `NEUTRAL`
+- `+2 .. +3`: `BULLISH`
+- `>= +4`: `STRONG_BULLISH`
 
-Normalized score is NOT probability. It is a descriptive scale for signal posture only.
+For the current Manual + Guard experiment, these values provide market context. They do not replace the user's manual BUY intent and do not bypass Risk Guard.
 
-### Assessment thresholds
-
-- raw <= -4: `STRONG_BEARISH`
-- raw -3 through -2: `BEARISH`
-- raw -1 through +1: `NEUTRAL`
-- raw +2 through +3: `BULLISH`
-- raw >= +4: `STRONG_BULLISH`
-
-### Readiness and look-ahead protection
-
-A `StrategyResult` is ready only when all required indicator values are present:
-- `ema_fast`
-- `ema_slow`
-- `rsi`
-- `macd`
-- `macd_signal`
-
-The service requires chronological, non-duplicate timestamps and does not use future values in the current evaluation. This is a no-look-ahead design.
-
-### Safety and scope
-
-- BULLISH does NOT mean BUY.
-- BEARISH does NOT mean SELL.
-- Strategy output does NOT authorize a trade.
-- Current market data is simulated.
-- This layer intentionally excludes broker logic, execution logic, AI/ML, credentials, and API keys.
-
-## V0.6 Backtest and Profit Evaluation
-
-The V0.6 layer is a deterministic historical evaluation engine. It is intentionally a calculation-only module and does not place live orders, connect to brokers, optimize parameters, or assume future knowledge.
-
-### Scope and conventions
-
-- Long-only historical simulation only.
-- No leverage and no short positions.
-- Execution is next-bar open, with signal timestamps remaining tied to the originating bar and the actual fill on the next bar open.
-- Transaction costs and slippage are applied explicitly to entry and exit notional amounts.
-- A position is closed on the first bearish or neutral exit signal, executed on the following bar, or forcibly at the last available close if the data ends while the trade remains open.
-- `INSUFFICIENT_DATA` never opens or closes a position and does not fabricate a signal.
-- Realized-equity drawdown is computed from the timeline of completed trade equity values.
-- `profit_factor` is `None` when there are no gross losses, which matches a zero-loss scenario rather than a dividing-by-zero result.
-- Historical performance is not a guarantee of future results and must not be treated as a live trading recommendation.
-
-This V0.6 engine is separate from the V0.5 risk engine. Risk remains a read-only gate on strategy quality, while backtesting is the historical performance evaluation layer that measures the realized impact of those signals.
-
-## V0.7 Paper Trading Engine
-
-The V0.7 paper trading engine simulates account activity with virtual capital only. It is a deterministic, calculation-only layer that consumes completed candles, existing strategy results, and existing V0.5 risk results. It does not connect to a broker or exchange, place real orders, use API keys, move money, or provide live execution.
-
-### Scope and authority
-
-- Paper trading is long-only with at most one open position.
-- A new position requires `data_ready == True`, a `BULLISH` or `STRONG_BULLISH` assessment, `RiskDecision.ALLOW`, paper trading enabled, and no open or pending position.
-- `WARNING` and `BLOCK` never authorize entry. Risk remains authoritative; paper trading does not duplicate or reinterpret the risk engine.
-- There is no leverage, margin, short selling, pyramiding, averaging down, martingale behavior, or strategy optimization.
-
-### Sequential execution
-
-- Entry and exit signals are scheduled as explicit pending actions.
-- Pending actions execute on the next received candle OPEN, with adverse slippage applied to the effective entry or exit price.
-- The first pending entry or exit owns execution and cannot be replaced by later equivalent signals.
-- Transaction costs are charged on entry and exit, and position sizing includes the entry fee without allowing cash to become negative.
-- `INSUFFICIENT_DATA` neither opens nor closes a position and does not fabricate a signal.
-
-The account exposes virtual cash, realized equity, open position state, pending actions, closed trades, and transaction costs. Performance metrics use realized closed trades only; unrealized profit and loss is not marked to market. A reset clears the account, pending actions, trade journal, costs, and event chronology.
-
-The current V0.7 session is process-local and in memory. Restarting the backend clears paper state. There is no persistence and no multi-user support.
-
-### Backtest versus paper trading
-
-V0.6 backtesting evaluates a historical candle sequence and reports deterministic performance metrics. V0.7 paper trading processes sequential events into a virtual account without real execution. Neither version guarantees future results or provides live trading functionality.
-
-## V0.8 Trading Dashboard Integration
-
-V0.8 connects the dashboard to backend-authoritative data while preserving the safety boundaries of V0.5 through V0.7.
-
-### Authority boundary
+## Risk authority
 
 `MARKET CONDITION != EXECUTION PERMISSION`
 
-The Strategy Engine describes market condition. It does not authorize execution. Execution permission can come only from an authoritative RiskResult produced from a complete valid RiskContext.
+Risk Guard is the execution veto authority. A prospective manual paper BUY must have complete, authoritative risk inputs. Missing or invalid safety inputs must fail closed rather than being replaced by fabricated zeros or frontend assumptions.
 
-`PaperTradingConfig.position_size_pct` is capital allocation, not `RiskContext.risk_per_trade_pct`. V0.8 never aliases these fields. The committed paper model does not yet contain an authoritative stop-loss/risk-at-stop model or sufficient account baselines to derive every required V0.5 risk fact.
+`PaperTradingConfig.position_size_pct` is capital allocation and must not be treated as risk-per-trade percentage.
 
-Therefore missing risk facts are fail-closed for prospective paper entry. The dashboard reports execution permission as unavailable with an explicit reason such as `Awaiting authoritative risk context`; it does not substitute zero, a hard-coded percentage, or paper allocation and does not present the state as `ALLOW`.
+Auto Stop determines a defensible technical stop before Risk Sizing derives quantity/risk. Risk Sizing must not move the stop merely to make a desired quantity fit the budget.
 
-### Dashboard data behavior
+## Backtest
 
-- Market, indicators, and strategy are fetched from backend API routes.
-- Paper account and realized paper performance are read-only dashboard data from the existing process-local backend session.
-- Loading or refreshing the dashboard does not start, process, or reset a paper session.
-- If no paper session exists, paper values are shown as not started/unavailable rather than fabricated zero balances or performance.
-- Paper performance is not recomputed in React.
-- The trade journal displays backend `closed_trades` only.
-- Backtest remains `NOT RUN` until an explicit backend-authoritative workflow supplies a real BacktestResult. No result is fabricated to fill the panel.
-- Backend domain failures are represented as unavailable/error states rather than zero-valued financial metrics.
+The backtest layer is deterministic historical evaluation. It does not place live orders, connect to brokers, optimize parameters, or guarantee future results. Costs/slippage and execution timing are explicit so performance can be evaluated without hidden assumptions.
 
-### V0.8 scope limits
+## Paper trading
 
-V0.8 does not add stop-loss placement, automatic position-risk derivation, live trading, broker execution, frontend trade accounting, a `/paper/step` shortcut, or fabricated daily-loss/drawdown baselines. These require separate design and regression tests.
+Paper trading uses virtual capital only. It is not a broker simulator for real money.
 
-### Verification checkpoint
+Important constraints include long-only behavior, bounded position handling, explicit execution rules, costs/slippage, and Risk Guard authority over prospective entry.
 
-The Phase 2 dashboard integration checkpoint was locally verified with:
+### Persistence warning
 
-- backend regression suite: `102 passed`;
-- frontend production build: passed;
-- frontend lint: `0 warnings and 0 errors`;
-- `git diff --check`: passed;
-- clean working tree after pulling the branch.
+The current paper session is **process-local/in-memory**. Restarting, sleeping, or redeploying the backend can reset paper account state. Cloud access therefore does not yet equal durable 24/7 experiment persistence. Persistent storage is a separate required milestone before long-running evidence collection can be considered reliable.
 
-The single pytest warning at this checkpoint is an upstream Starlette/AnyIO deprecation warning and did not fail the suite.
+## Cloud / remote testing
 
-## Current status
+Cloud configuration exists to make PAPER testing reachable without requiring the development laptop to remain on. This does not change the safety boundary: cloud deployment remains PAPER ONLY.
 
-TradingGuard currently provides a simulated market-data engine, deterministic indicator calculations, read-only strategy scoring, the V0.5 risk gate, V0.6 backtest/performance evaluation, V0.7 in-memory paper trading, and the V0.8 backend-authoritative dashboard integration described above.
+A production-like remote experiment should eventually add persistent storage, service health/heartbeat monitoring, durable trade/opportunity logs, and daily reporting before autonomous paper operation is treated as production-ready.
 
-The current dashboard does not fabricate missing risk permission, paper balances, trade history, or backtest performance. TradingGuard still deliberately excludes live trading, broker integration, real order execution, AI-powered prediction, and credentialed market access.
+## Continuous integration
+
+GitHub Actions is configured in `.github/workflows/ci.yml` to run on the integration branch and pull requests to `main`.
+
+CI verifies:
+
+- backend: dependency install + `pytest -q`
+- frontend: `npm ci` + production build + lint
+
+A historical local test count is not treated as proof for the current HEAD. The current commit is considered technically verified only when its corresponding CI checks complete successfully.
+
+## Version status
+
+Implemented work spans the V0.5 Risk Engine, V0.6 backtest/profit evaluation, V0.7 paper engine, V0.8 dashboard/cloud integration work, and V0.9 risk-sizing/Auto Stop/manual-guard foundations developed on the integration branch.
+
+Because these changes currently coexist in a broad integration PR, the PR should remain unmerged until the current HEAD receives a clean CI result and the active Manual + Guard behavior is reviewed as the intended release boundary.
+
+## Roadmap gate
+
+The intended validation order is:
+
+`Manual + Guard → evidence collection → Risk Guard evaluation → autonomous PAPER → 24/7 cloud PAPER → persistent LPH/reporting → final audit → broker/exchange sandbox/testnet → very small real capital only after explicit approval`
+
+No later stage is implied to be approved merely because its supporting code exists.
+
+## Disclaimer
+
+TradingGuard is an engineering and personal decision-support project. Backtests, paper results, risk decisions, strategy scores, and autonomous experiments do not guarantee profit or predict future market outcomes with certainty.
