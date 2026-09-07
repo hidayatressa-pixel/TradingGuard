@@ -8,7 +8,7 @@ from backend.app.paper.models import PaperAccount
 from backend.app.paper.orchestration import AutoPaperEntryOrchestrator, AutoPaperEntryResult
 from backend.app.paper.service import PaperTradingService
 from backend.app.risk.models import RiskPolicy
-from backend.app.strategy.models import StrategyResult
+from backend.app.strategy.models import Assessment, StrategyResult
 from backend.app.strategy.service import StrategyService
 
 
@@ -113,10 +113,7 @@ class AutoPaperLoopService:
 
         entry = None
         flat = account.open_position is None and account.pending_entry is None and account.pending_exit is None
-        # Deterministic opportunity gate: score <= 1 does not propose a BUY.
-        # A score > 1 must immediately reach Auto Stop -> sizing -> Risk Guard;
-        # Risk Guard remains the authority that can ALLOW/WARNING/BLOCK execution.
-        eligible = current.data_ready and current.score > 1
+        eligible = current.data_ready and current.assessment in {Assessment.BULLISH, Assessment.STRONG_BULLISH}
         if flat and eligible:
             entry = self.orchestrator.evaluate_and_schedule_auto(
                 strategy=current, candles=completed, risk_budget_pct=risk_budget_pct,
@@ -131,18 +128,14 @@ class AutoPaperLoopService:
             return self._result(strategy=current, entry=entry, account=account,
                                 reason=entry.reason, market_candle=market_candle)
         if account.pending_exit is not None:
-            reason = f"EXIT ARMED: completed strategy score={current.score} ({current.assessment.value}); PAPER exit is scheduled for the next authoritative candle event."
+            reason = f"EXIT ARMED: completed strategy is {current.assessment.value}; PAPER exit is scheduled for the next authoritative candle event."
         elif account.open_position is not None:
-            reason = f"POSITION MONITORING: completed strategy score={current.score} ({current.assessment.value}); Stop Loss and exit rules remain active."
+            reason = f"POSITION MONITORING: completed strategy is {current.assessment.value}; Stop Loss and exit rules remain active."
         elif account.pending_entry is not None:
             reason = "Sized PAPER BUY is pending next-completed-candle execution revalidation."
         elif eligible:
-            reason = f"Score {current.score} passed the opportunity gate (>1), but no entry is authorized in the current account state."
-        elif not current.data_ready:
-            reason = "WAIT: completed candle does not yet have enough indicator data for an authoritative score."
-        elif current.score < 0:
-            reason = f"BLOCK BUY: completed strategy score={current.score} is below 0."
+            reason = "Eligible bullish setup reached the gate, but no entry is authorized in the current account state."
         else:
-            reason = f"WAIT: completed strategy score={current.score} is inside the 0..1 no-entry zone."
+            reason = "Strategy is not an eligible bullish entry setup; no PAPER entry was proposed."
         return self._result(strategy=current, entry=None, account=account,
                             reason=reason, market_candle=market_candle)
