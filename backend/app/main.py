@@ -13,6 +13,7 @@ from backend.app.market.data_provider import BinancePublicMarketDataProvider, Ma
 from backend.app.market.models import Candle
 from backend.app.market.validation import validate_candle_dataset
 from backend.app.paper.auto_loop import AutoPaperCycleResult, AutoPaperLoopService
+from backend.app.paper.autonomous_portfolio import AutonomousPortfolioResult, AutonomousPortfolioService
 from backend.app.paper.manual import ManualGuardedTradeResult, ManualGuardedTradeService
 from backend.app.paper.models import PaperAccount, PaperPerformanceSnapshot, PaperTradingConfig
 from backend.app.paper.persistence import PaperAccountRepository
@@ -50,7 +51,7 @@ restored_account=paper_repository.load()
 if restored_account is not None:
     if restored_account.open_position is not None and not restored_account.open_positions: restored_account.open_positions=[restored_account.open_position]
     restored_account.sync_legacy_position(); paper_service.account=restored_account
-auto_paper_loop=AutoPaperLoopService(paper_service); manual_trade_service=ManualGuardedTradeService(paper_service)
+auto_paper_loop=AutoPaperLoopService(paper_service); autonomous_portfolio_service=AutonomousPortfolioService(paper_service); manual_trade_service=ManualGuardedTradeService(paper_service)
 
 def _persist(account:PaperAccount)->PaperAccount:
     paper_repository.save(account); return account
@@ -131,6 +132,15 @@ def manual_paper_sell(symbol:str=Query(...,min_length=1),source:str=Query('binan
         account=paper_service.state(); position=account.position_for(symbol)
         if position is None: raise HTTPException(status_code=422,detail=f'No active paper position for {symbol} to SELL.')
         candles,_,strategy=_authoritative_market(source,position.symbol,position.timeframe); result=manual_trade_service.sell(strategy=strategy,market_price=float(candles[-1].close),symbol=symbol)
+        _persist(result.account); return result
+    except HTTPException: raise
+    except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+@app.post('/paper/autonomous-portfolio-cycle',response_model=AutonomousPortfolioResult)
+def autonomous_portfolio_cycle(symbol:str=Query(...,min_length=1),timeframe:str=Query(...,pattern=r'^(1m|5m|15m|1h|4h|1d)$'),source:str=Query('binance',pattern=r'^(mock|binance)$'),risk_budget_pct:float=Query(0.5,gt=0,le=1.0),max_allocation_pct:float=Query(20.0,gt=0,le=100))->AutonomousPortfolioResult:
+    try:
+        candles,completed,strategy=_authoritative_market(source,symbol,timeframe)
+        result=autonomous_portfolio_service.cycle(completed_candles=completed,strategy=strategy,market_price=float(candles[-1].close),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
         _persist(result.account); return result
     except HTTPException: raise
     except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
