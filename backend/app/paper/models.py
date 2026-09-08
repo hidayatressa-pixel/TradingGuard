@@ -61,13 +61,13 @@ class PaperTrade(BaseModel):
 
 class PaperPerformanceSnapshot(BaseModel):
     model_config=ConfigDict(strict=True)
-    initial_capital:float; realized_equity:float; realized_net_profit:float; realized_return_pct:float; total_closed_trades:int; winning_trades:int; losing_trades:int; breakeven_trades:int; win_rate_pct:float; gross_profit:float; gross_loss:float; profit_factor:float|None; average_trade_pnl:float; expected_value:float; total_transaction_cost:float; open_position:PaperPosition|None; pending_action:PendingEntry|PendingExit|None
+    initial_capital:float; realized_equity:float; realized_net_profit:float; realized_return_pct:float; total_closed_trades:int; winning_trades:int; losing_trades:int; breakeven_trades:int; win_rate_pct:float; gross_profit:float; gross_loss:float; profit_factor:float|None; average_trade_pnl:float; expected_value:float; total_transaction_cost:float; open_position:PaperPosition|None; open_positions:list[PaperPosition]=Field(default_factory=list); pending_action:PendingEntry|PendingExit|None
 
 
 class PaperAccount(BaseModel):
     model_config=ConfigDict(strict=True)
     config:PaperTradingConfig; active:bool=False; initial_capital:float; cash:float; realized_equity:float; peak_realized_equity:float; day_start_equity:float; risk_day:str|None=None
-    open_position:PaperPosition|None=None; closed_trades:list[PaperTrade]=Field(default_factory=list); total_transaction_cost:float=0.0; pending_entry:PendingEntry|None=None; pending_exit:PendingExit|None=None; last_event_timestamp:datetime|None=None; event_index:int=0
+    open_position:PaperPosition|None=None; open_positions:list[PaperPosition]=Field(default_factory=list); closed_trades:list[PaperTrade]=Field(default_factory=list); total_transaction_cost:float=0.0; pending_entry:PendingEntry|None=None; pending_exit:PendingExit|None=None; last_event_timestamp:datetime|None=None; event_index:int=0
 
     @model_validator(mode="after")
     def validate_state(self)->"PaperAccount":
@@ -76,11 +76,19 @@ class PaperAccount(BaseModel):
             if not math.isfinite(value): raise ValueError("paper account numeric values must be finite.")
         if self.initial_capital <= 0 or self.peak_realized_equity <= 0 or self.day_start_equity <= 0: raise ValueError("paper account equity baselines must be positive.")
         if self.peak_realized_equity < self.realized_equity: raise ValueError("peak_realized_equity cannot be below realized_equity.")
+        symbols=[position.symbol for position in self.open_positions]
+        if len(symbols)!=len(set(symbols)): raise ValueError("paper portfolio cannot contain duplicate open positions for the same symbol.")
         return self
 
     @property
     def pending_action(self)->PendingEntry|PendingExit|None: return self.pending_entry or self.pending_exit
 
+    def position_for(self,symbol:str)->PaperPosition|None:
+        return next((position for position in self.open_positions if position.symbol==symbol),None)
+
+    def sync_legacy_position(self)->None:
+        self.open_position=self.open_positions[0] if self.open_positions else None
+
     def performance(self)->PaperPerformanceSnapshot:
         trades=self.closed_trades; winning=sum(1 for trade in trades if trade.net_pnl>0); losing=sum(1 for trade in trades if trade.net_pnl<0); gross_profit=sum(max(trade.net_pnl,0.0) for trade in trades); gross_loss=sum(abs(min(trade.net_pnl,0.0)) for trade in trades); total=len(trades); average=sum(trade.net_pnl for trade in trades)/total if total else 0.0
-        return PaperPerformanceSnapshot(initial_capital=self.initial_capital,realized_equity=self.realized_equity,realized_net_profit=self.realized_equity-self.initial_capital,realized_return_pct=((self.realized_equity-self.initial_capital)/self.initial_capital)*100.0,total_closed_trades=total,winning_trades=winning,losing_trades=losing,breakeven_trades=total-winning-losing,win_rate_pct=(winning/total)*100.0 if total else 0.0,gross_profit=gross_profit,gross_loss=gross_loss,profit_factor=(gross_profit/gross_loss) if gross_loss>0 else None,average_trade_pnl=average,expected_value=average,total_transaction_cost=self.total_transaction_cost,open_position=self.open_position,pending_action=self.pending_action)
+        return PaperPerformanceSnapshot(initial_capital=self.initial_capital,realized_equity=self.realized_equity,realized_net_profit=self.realized_equity-self.initial_capital,realized_return_pct=((self.realized_equity-self.initial_capital)/self.initial_capital)*100.0,total_closed_trades=total,winning_trades=winning,losing_trades=losing,breakeven_trades=total-winning-losing,win_rate_pct=(winning/total)*100.0 if total else 0.0,gross_profit=gross_profit,gross_loss=gross_loss,profit_factor=(gross_profit/gross_loss) if gross_loss>0 else None,average_trade_pnl=average,expected_value=average,total_transaction_cost=self.total_transaction_cost,open_position=self.open_position,open_positions=list(self.open_positions),pending_action=self.pending_action)
