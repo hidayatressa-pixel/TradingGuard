@@ -17,7 +17,7 @@ class RiskContextAvailability(BaseModel):
 
 
 class PaperRiskContextBuilder:
-    """Build prospective-entry RiskContext only from authoritative paper state."""
+    """Build prospective-entry RiskContext only from authoritative paper portfolio state."""
 
     def build(self, account: PaperAccount, risk_per_trade_pct: float | None) -> RiskContextAvailability:
         missing: list[str] = []
@@ -34,11 +34,12 @@ class PaperRiskContextBuilder:
 
         daily_loss_pct = max((account.day_start_equity - account.realized_equity) / account.day_start_equity * 100.0, 0.0)
         drawdown_pct = max((account.peak_realized_equity - account.realized_equity) / account.peak_realized_equity * 100.0, 0.0)
-        exposure_notional = account.open_position.entry_notional if account.open_position is not None else 0.0
+        positions=account.open_positions if account.open_positions else ([account.open_position] if account.open_position is not None else [])
+        exposure_notional=sum(position.entry_notional for position in positions)
         total_exposure_pct = (exposure_notional / account.realized_equity * 100.0) if account.realized_equity > 0 else math.inf
         values = (daily_loss_pct, drawdown_pct, total_exposure_pct)
         if not all(math.isfinite(value) and value >= 0 for value in values):
             return RiskContextAvailability(available=False, context=None, missing_facts=["derived_account_risk"], reason="Derived account risk is invalid; prospective entry remains fail-closed.")
 
-        context = RiskContext(risk_per_trade_pct=float(risk_per_trade_pct), daily_loss_pct=daily_loss_pct, total_exposure_pct=total_exposure_pct, open_positions=1 if account.open_position is not None else 0, current_drawdown_pct=drawdown_pct, trading_enabled=account.active and account.config.paper_trading_enabled)
-        return RiskContextAvailability(available=True, context=context, missing_facts=[], reason="Complete authoritative paper RiskContext is available for Risk Guard evaluation.")
+        context = RiskContext(risk_per_trade_pct=float(risk_per_trade_pct), daily_loss_pct=daily_loss_pct, total_exposure_pct=total_exposure_pct, open_positions=len(positions), current_drawdown_pct=drawdown_pct, trading_enabled=account.active and account.config.paper_trading_enabled)
+        return RiskContextAvailability(available=True, context=context, missing_facts=[], reason="Complete authoritative paper portfolio RiskContext is available for Risk Guard evaluation.")
