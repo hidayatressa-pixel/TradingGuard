@@ -53,7 +53,7 @@ export function useLiveMarket(source: MarketSource, symbol: string): LiveMarketS
       socket.onopen = () => {
         if (!active) return
         lastMessageAt = Date.now()
-        setState(value => ({ ...value, connected: true, error: null }))
+        setState(value => ({ ...value, price: null, eventTime: null, connected: true, error: null }))
       }
       socket.onmessage = event => {
         if (!active) return
@@ -89,7 +89,6 @@ export function useLiveMarket(source: MarketSource, symbol: string): LiveMarketS
       }
     }, 5000)
 
-    setState(initialState)
     connect()
     return () => {
       active = false
