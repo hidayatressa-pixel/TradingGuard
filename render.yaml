@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: tradingguard-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: cloud-paper
+      - key: CORS_ORIGINS
+        sync: false
+
+  - type: web
+    name: tradingguard-web
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false

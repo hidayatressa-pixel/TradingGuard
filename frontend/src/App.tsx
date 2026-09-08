@@ -1,108 +1,42 @@
+import { useEffect, useState, type ReactNode } from 'react'
+import { Activity, BarChart3, BookOpen, Database, Settings, ShieldAlert, ShieldCheck, TestTube2, WalletCards } from 'lucide-react'
+import { tradingGuardApi, type ManualTradeResult, type MarketSource } from './api/client'
+import { useBacktest } from './api/useBacktest'
+import { useLiveMarket } from './api/useLiveMarket'
+import { usePaperReadOnly } from './api/usePaperReadOnly'
+import type { Candle, IndicatorSnapshot, StrategyResult } from './api/types'
+import { BacktestView, MarketView, SettingsView, StrategyView, TradeJournalView, type Selection } from './components/DashboardViews'
+import { DashboardIndonesia, RiskGuardIndonesia } from './components/LocalizedCoreViews'
+import { ManualTradeControl } from './components/ManualTradeControl'
+import { MarketChart } from './components/MarketChart'
+import { PortfolioPaperView, type PaperMarks } from './components/PortfolioPaperView'
+import { StrategyTransitionHistory } from './components/StrategyTransitionHistory'
 import './App.css'
 
-const marketOverview = [
-  { label: 'S&P 500', value: '5,432.18', change: '+0.82%' },
-  { label: 'NASDAQ', value: '17,861.32', change: '+1.14%' },
-  { label: 'DOW', value: '39,804.50', change: '+0.41%' },
-]
+type View='Dashboard'|'Market'|'Strategy'|'Risk Guard'|'Paper Trading'|'Backtest'|'Trade Journal'|'Settings'
+type Data={candles:Candle[];indicators:IndicatorSnapshot[];strategies:StrategyResult[]}
+type ChartRange='1H'|'4H'|'1D'|'1W'|'1M';type Theme='dark'|'light'
+const MARKET_REFRESH_SECONDS=5
+const rangeTimeframe:Record<ChartRange,string>={'1H':'1m','4H':'5m','1D':'15m','1W':'1h','1M':'4h'}
+const PAPER_SYMBOLS=['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','ADAUSDT','DOGEUSDT','AVAXUSDT','LINKUSDT','LTCUSDT','TRXUSDT','DOTUSDT'] as const
+const nav:Array<{name:View;label:string;icon:typeof Activity}>=[{name:'Dashboard',label:'Dashboard',icon:Activity},{name:'Market',label:'Pasar',icon:BarChart3},{name:'Strategy',label:'Strategi',icon:Database},{name:'Risk Guard',label:'Risk Guard',icon:ShieldAlert},{name:'Paper Trading',label:'Paper Trading',icon:WalletCards},{name:'Backtest',label:'Backtest',icon:TestTube2},{name:'Trade Journal',label:'Jurnal Trade',icon:BookOpen},{name:'Settings',label:'Pengaturan',icon:Settings}]
+const title:Record<View,string>={Dashboard:'Dashboard Pasar Real',Market:'Pasar',Strategy:'Strategi','Risk Guard':'Risk Guard','Paper Trading':'Paper Trading',Backtest:'Backtest','Trade Journal':'Jurnal Trade',Settings:'Pengaturan'}
 
-const recentSignals = [
-  { symbol: 'AAPL', signal: 'Bullish', strength: 'Strong' },
-  { symbol: 'MSFT', signal: 'Neutral', strength: 'Moderate' },
-  { symbol: 'NVDA', signal: 'Bullish', strength: 'Strong' },
-  { symbol: 'TSLA', signal: 'Bearish', strength: 'Cautious' },
-]
-
-function App() {
-  return (
-    <div className="dashboard-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Decision support</p>
-          <h1>TradingGuard</h1>
-        </div>
-        <div className="status-badge">Paper Trading Active</div>
-      </header>
-
-      <main className="dashboard-grid">
-        <section className="card span-2">
-          <div className="card-header">
-            <h2>Market Overview</h2>
-            <span>Updated 5 min ago</span>
-          </div>
-          <div className="market-list">
-            {marketOverview.map((item) => (
-              <div key={item.label} className="market-row">
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
-                <em>{item.change}</em>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="card">
-          <div className="card-header">
-            <h2>Signal Score</h2>
-          </div>
-          <div className="metric-value">72</div>
-          <p className="metric-label">Risk-adjusted signal confidence</p>
-        </section>
-
-        <section className="card">
-          <div className="card-header">
-            <h2>Risk Level</h2>
-          </div>
-          <div className="metric-value risk">Balanced</div>
-          <p className="metric-label">Exposure capped at 20%</p>
-        </section>
-
-        <section className="card span-2">
-          <div className="card-header">
-            <h2>Paper Trading status</h2>
-          </div>
-          <div className="paper-status">
-            <div>
-              <span className="label">Portfolio Value</span>
-              <strong>$128,460</strong>
-            </div>
-            <div>
-              <span className="label">Daily P/L</span>
-              <strong className="positive">+$1,240</strong>
-            </div>
-            <div>
-              <span className="label">Orders</span>
-              <strong>8 active</strong>
-            </div>
-          </div>
-        </section>
-
-        <section className="card span-2">
-          <div className="card-header">
-            <h2>Recent Signals</h2>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Signal</th>
-                <th>Strength</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentSignals.map((item) => (
-                <tr key={item.symbol}>
-                  <td>{item.symbol}</td>
-                  <td>{item.signal}</td>
-                  <td>{item.strength}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      </main>
-    </div>
-  )
+function App(){
+ const [view,setView]=useState<View>('Dashboard'),[source,setSource]=useState<MarketSource>('binance'),[symbol,setSymbol]=useState('BTCUSDT'),[chartRange,setChartRange]=useState<ChartRange>('1D')
+ const [theme,setTheme]=useState<Theme>(()=>localStorage.getItem('tradingguard-theme')==='light'?'light':'dark'),[marks,setMarks]=useState<PaperMarks>({}),[manualResult,setManualResult]=useState<ManualTradeResult|null>(null)
+ const timeframe=rangeTimeframe[chartRange],selection:Selection={source,symbol,timeframe}
+ const [refreshKey,setRefreshKey]=useState(0),[data,setData]=useState<Data>({candles:[],indicators:[],strategies:[]}),[loadedRequest,setLoadedRequest]=useState(''),[error,setError]=useState<string|null>(null)
+ const paper=usePaperReadOnly(),backtest=useBacktest(),live=useLiveMarket(source,symbol),requestKey=`${source}:${symbol}:${timeframe}:${refreshKey}`,loading=loadedRequest!==requestKey
+ useEffect(()=>{localStorage.setItem('tradingguard-theme',theme)},[theme])
+ useEffect(()=>{let mounted=true;Promise.all([tradingGuardApi.getMarketCandles(symbol,timeframe,100,source),tradingGuardApi.getIndicators(symbol,timeframe,100,source),tradingGuardApi.getStrategy(symbol,timeframe,100,source)]).then(([candles,indicators,strategies])=>{if(!mounted)return;setData({candles,indicators,strategies});setError(null);setLoadedRequest(requestKey)}).catch((cause:unknown)=>{if(!mounted)return;setData({candles:[],indicators:[],strategies:[]});setError(cause instanceof Error?cause.message:'Sumber data pasar yang dipilih tidak dapat dimuat.');setLoadedRequest(requestKey)});return()=>{mounted=false}},[source,symbol,timeframe,refreshKey,requestKey])
+ useEffect(()=>{const timer=window.setInterval(()=>setRefreshKey(value=>value+1),MARKET_REFRESH_SECONDS*1000);return()=>window.clearInterval(timer)},[])
+ useEffect(()=>{let mounted=true;const positions=paper.account?.open_positions??[];if(!positions.length)return()=>{mounted=false};Promise.all(positions.map(async position=>{const candles=await tradingGuardApi.getMarketCandles(position.symbol,position.timeframe,2,source);return [position.symbol,candles.at(-1)?.close] as const})).then(values=>{if(!mounted)return;setMarks(Object.fromEntries(values.filter((item):item is readonly [string,number]=>typeof item[1]==='number')))}).catch(()=>{/* keep previous marks; primary market error remains visible elsewhere */});return()=>{mounted=false}},[paper.account,refreshKey,source])
+ const activeMarks=(paper.account?.open_positions?.length??0)>0?marks:{}
+ const completedCandle=data.candles.at(-2),completedIndicator=data.indicators.at(-2),completedStrategy=data.strategies.at(-2),real=source==='binance'
+ const manualControl=<ManualTradeControl paper={paper} strategy={completedStrategy} source={source} onResult={setManualResult}/>
+ const controls=<div className="panel-soft flex flex-wrap items-end gap-3 rounded p-4"><label className="text-xs"><span className="mono mb-1 block text-[9px] text-slate-500">SUMBER</span><select value={source} onChange={e=>{setSource(e.target.value as MarketSource);setManualResult(null)}} className="rounded border border-slate-700 bg-slate-900 px-3 py-2"><option value="binance">REAL · Binance Public</option><option value="mock">MOCK · Deterministik</option></select></label><label className="text-xs"><span className="mono mb-1 block text-[9px] text-slate-500">SIMBOL</span><select value={symbol} onChange={e=>{setSymbol(e.target.value);setManualResult(null)}} className="rounded border border-slate-700 bg-slate-900 px-3 py-2">{PAPER_SYMBOLS.map(item=><option key={item}>{item}</option>)}</select></label><div><span className="mono mb-1 block text-[9px] text-slate-500">RENTANG CHART</span><div className="flex overflow-hidden rounded border border-slate-700">{(['1H','4H','1D','1W','1M'] as ChartRange[]).map(range=><button key={range} onClick={()=>{setChartRange(range);setManualResult(null)}} className={`px-3 py-2 text-xs ${chartRange===range?'bg-sky-500/15 text-sky-300':'bg-slate-900 text-slate-500 hover:text-slate-300'}`}>{range}</button>)}</div><div className="mono mt-1 text-[8px] text-slate-600">RESOLUSI CANDLE · {timeframe}</div></div>{real&&<div className="rounded border border-emerald-500/20 bg-emerald-500/5 px-3 py-2"><div className="mono text-[8px] text-slate-500">HARGA LIVE · WEBSOCKET</div><div className="mono text-sm font-bold text-white">{live.price===null?'—':live.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8})} USDT</div><div className={`mono text-[8px] ${live.connected?'text-emerald-400':'text-amber-400'}`}>● {live.connected?'STREAMING':'MENGHUBUNGKAN ULANG'}</div></div>}</div>
+ const content:Record<View,ReactNode>={Dashboard:<DashboardIndonesia selection={selection} candle={completedCandle} indicator={completedIndicator} strategy={completedStrategy} loading={loading}/>,Market:<div className="space-y-4"><MarketChart candles={data.candles} indicators={data.indicators} symbol={symbol} timeframe={`${chartRange} view · ${timeframe} candles`}/><MarketView candles={data.candles} symbol={symbol}/></div>,Strategy:<div className="space-y-4"><StrategyView strategy={completedStrategy} loading={loading}/><StrategyTransitionHistory results={data.strategies.slice(0,-1)}/></div>,'Risk Guard':<div className="space-y-4"><RiskGuardIndonesia strategy={completedStrategy} manualResult={manualResult}/>{manualControl}</div>,'Paper Trading':<div className="space-y-4"><PortfolioPaperView paper={paper} selectedSymbol={symbol} marks={activeMarks}/>{manualControl}</div>,Backtest:<BacktestView backtest={backtest} candles={data.candles} strategies={data.strategies} loading={loading}/>,'Trade Journal':<TradeJournalView paper={paper}/>,Settings:<SettingsView selection={selection} theme={theme} onThemeChange={setTheme}/>}
+ return <div className={`app-shell theme-${theme} min-h-screen text-slate-200`}><aside className="sidebar fixed inset-y-0 left-0 w-[238px] px-4 py-6"><div className="mb-8 flex items-center gap-3"><div className="grid size-9 place-items-center rounded bg-sky-500/15 text-sky-300"><ShieldCheck size={20}/></div><div><div className="font-bold text-white">TradingGuard</div><div className="mono text-[10px] text-slate-500">CONTROL CENTER · v0.9</div></div></div><div className="mono mb-3 text-[9px] uppercase tracking-[.2em] text-slate-600">OPERASI</div>{nav.map(item=>{const Icon=item.icon;return <button key={item.name} onClick={()=>setView(item.name)} className={`nav-item mb-1 flex w-full items-center gap-2 rounded px-3 py-2.5 text-left text-xs ${view===item.name?'active':''}`}><Icon size={14}/>{item.label}</button>})}<div className="panel-soft absolute bottom-5 left-4 right-4 rounded p-3 text-[10px] text-slate-500">MANUAL + GUARD · PAPER only. Auto entry dinonaktifkan dari UI selama fase validasi algoritma.</div></aside><main className="main-area ml-[238px] min-h-screen px-8 py-6"><header className="mb-6 border-b border-slate-800 pb-5"><div className="mb-5 flex flex-wrap items-center justify-between gap-4"><div><div className="mono text-[10px] uppercase tracking-[.18em] text-slate-500">Pusat kontrol risiko</div><h1 className="text-2xl font-bold text-white">{title[view]}</h1></div><div className={`rounded border px-3 py-2 mono text-[10px] ${real?'border-sky-500/30 bg-sky-500/10 text-sky-300':'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}>● {real?'DATA PUBLIK REAL · BINANCE':'DATA MOCK'}</div></div>{controls}</header>{error&&<div className="mb-5 rounded border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200">Sumber data tidak tersedia: {error}. Tidak ada fallback diam-diam ke data mock.</div>}{live.error&&real&&<div className="mb-5 rounded border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{live.error} Data historis REST tetap terpisah; tidak ada fallback ke mock.</div>}{content[view]}<footer className="mt-6 border-t border-slate-800 py-5 mono text-[9px] text-slate-600">SUMBER: {real?'BINANCE PUBLIC REST + PUBLIC WEBSOCKET':'TRADINGGUARD MOCK DETERMINISTIK'} · {real?(live.connected?'STREAM LIVE TERHUBUNG':'STREAM MENGHUBUNGKAN ULANG'):'TANPA STREAM LIVE'} · CHART {chartRange}/{timeframe} · MODE MANUAL + GUARD · PAPER ONLY · TANPA EKSEKUSI BROKER</footer></main></div>
 }
-
 export default App
