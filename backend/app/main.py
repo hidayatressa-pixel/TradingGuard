@@ -15,6 +15,7 @@ from backend.app.market.validation import validate_candle_dataset
 from backend.app.paper.auto_loop import AutoPaperCycleResult, AutoPaperLoopService
 from backend.app.paper.manual import ManualGuardedTradeResult, ManualGuardedTradeService
 from backend.app.paper.models import PaperAccount, PaperPerformanceSnapshot, PaperTradingConfig
+from backend.app.paper.persistence import PaperAccountRepository
 from backend.app.paper.service import PaperTradingService
 from backend.app.risk.context import PaperRiskContextBuilder, RiskContextAvailability
 from backend.app.risk.models import RiskContext, RiskPolicy, RiskResult
@@ -44,7 +45,15 @@ def _cors_origins()->list[str]:
 
 app=FastAPI(title='TradingGuard',version='0.9.0-dev')
 app.add_middleware(CORSMiddleware,allow_origins=_cors_origins(),allow_credentials=False,allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','Accept'])
-mock_provider=MockMarketDataProvider(); real_provider=BinancePublicMarketDataProvider(); indicator_service=IndicatorService(); strategy_service=StrategyService(); risk_service=RiskService(); risk_sizing_service=RiskSizingService(); risk_context_builder=PaperRiskContextBuilder(); backtest_service=BacktestService(); paper_service=PaperTradingService(); auto_paper_loop=AutoPaperLoopService(paper_service); manual_trade_service=ManualGuardedTradeService(paper_service)
+mock_provider=MockMarketDataProvider(); real_provider=BinancePublicMarketDataProvider(); indicator_service=IndicatorService(); strategy_service=StrategyService(); risk_service=RiskService(); risk_sizing_service=RiskSizingService(); risk_context_builder=PaperRiskContextBuilder(); backtest_service=BacktestService(); paper_service=PaperTradingService(); paper_repository=PaperAccountRepository(os.getenv('PAPER_DB_PATH','data/tradingguard.db'))
+restored_account=paper_repository.load()
+if restored_account is not None:
+    if restored_account.open_position is not None and not restored_account.open_positions: restored_account.open_positions=[restored_account.open_position]
+    restored_account.sync_legacy_position(); paper_service.account=restored_account
+auto_paper_loop=AutoPaperLoopService(paper_service); manual_trade_service=ManualGuardedTradeService(paper_service)
+
+def _persist(account:PaperAccount)->PaperAccount:
+    paper_repository.save(account); return account
 
 def _provider(source:str)->MarketDataProvider:
     if source=='mock': return mock_provider
@@ -61,8 +70,7 @@ def _candles(source:str,symbol:str,timeframe:str,limit:int)->list[Candle]:
 def _authoritative_market(source:str,symbol:str,timeframe:str,limit:int=100):
     candles=_candles(source,symbol,timeframe,limit)
     if len(candles)<2: raise HTTPException(status_code=422,detail='At least one completed candle and one market observation are required.')
-    completed=candles[:-1]
-    strategies=strategy_service.build_results(indicator_service.build_snapshots(completed))
+    completed=candles[:-1]; strategies=strategy_service.build_results(indicator_service.build_snapshots(completed))
     if not strategies: raise HTTPException(status_code=422,detail='Strategy is unavailable for completed candles.')
     return candles,completed,strategies[-1]
 
@@ -106,26 +114,24 @@ def _parse_risk(payload:dict)->RiskResult:
     x=dict(payload);x['timestamp']=datetime.fromisoformat(str(x['timestamp']).replace('Z','+00:00'));return RiskResult.model_validate(x)
 @app.post('/paper/start',response_model=PaperAccount)
 def start_paper(payload:dict|None=Body(default=None))->PaperAccount:
-    try:r=PaperStartRequest.model_validate(payload or {});return paper_service.start(PaperTradingConfig.model_validate(r.config or {}))
+    try:r=PaperStartRequest.model_validate(payload or {});return _persist(paper_service.start(PaperTradingConfig.model_validate(r.config or {})))
     except (KeyError,ValueError,TypeError) as exc:raise HTTPException(status_code=400,detail=str(exc)) from exc
 
 @app.post('/paper/manual-buy',response_model=ManualGuardedTradeResult)
 def manual_paper_buy(symbol:str=Query(...,min_length=1),timeframe:str=Query(...,pattern=r'^(1m|5m|15m|1h|4h|1d)$'),source:str=Query('binance',pattern=r'^(mock|binance)$'),risk_budget_pct:float=Query(0.5,gt=0,le=1.0),max_allocation_pct:float=Query(20.0,gt=0,le=100))->ManualGuardedTradeResult:
-    """Interactive PAPER BUY: backend derives strategy/stop/sizing/risk; no client bypass and no pending loop."""
     try:
-        candles,completed,strategy=_authoritative_market(source,symbol,timeframe)
-        return manual_trade_service.buy(completed_candles=completed,strategy=strategy,market_price=float(candles[-1].close),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
+        candles,completed,strategy=_authoritative_market(source,symbol,timeframe); result=manual_trade_service.buy(completed_candles=completed,strategy=strategy,market_price=float(candles[-1].close),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
+        _persist(result.account); return result
     except HTTPException: raise
     except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
 
 @app.post('/paper/manual-sell',response_model=ManualGuardedTradeResult)
-def manual_paper_sell(source:str=Query('binance',pattern=r'^(mock|binance)$'))->ManualGuardedTradeResult:
-    """Close the active PAPER position immediately using authoritative market data."""
+def manual_paper_sell(symbol:str=Query(...,min_length=1),source:str=Query('binance',pattern=r'^(mock|binance)$'))->ManualGuardedTradeResult:
     try:
-        account=paper_service.state(); position=account.open_position
-        if position is None: raise HTTPException(status_code=422,detail='No active paper position to SELL.')
-        candles,_,strategy=_authoritative_market(source,position.symbol,position.timeframe)
-        return manual_trade_service.sell(strategy=strategy,market_price=float(candles[-1].close))
+        account=paper_service.state(); position=account.position_for(symbol)
+        if position is None: raise HTTPException(status_code=422,detail=f'No active paper position for {symbol} to SELL.')
+        candles,_,strategy=_authoritative_market(source,position.symbol,position.timeframe); result=manual_trade_service.sell(strategy=strategy,market_price=float(candles[-1].close),symbol=symbol)
+        _persist(result.account); return result
     except HTTPException: raise
     except ValueError as exc: raise HTTPException(status_code=422,detail=str(exc)) from exc
 
@@ -134,13 +140,13 @@ def auto_paper_cycle(symbol:str=Query(...,min_length=1),timeframe:str=Query(...,
     try:
         account=paper_service.state()
         if not account.active or not account.config.paper_trading_enabled: raise HTTPException(status_code=422,detail='Paper trading is inactive; autonomous evaluation remains fail-closed.')
-        return auto_paper_loop.cycle(_candles(source,symbol,timeframe,limit),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct)
+        result=auto_paper_loop.cycle(_candles(source,symbol,timeframe,limit),risk_budget_pct=risk_budget_pct,max_allocation_pct=max_allocation_pct); _persist(result.account); return result
     except HTTPException: raise
     except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
 @app.post('/paper/process',response_model=PaperAccount)
 def process_paper(payload:dict=Body(...))->PaperAccount:
     try:
-        r=PaperProcessRequest.model_validate(payload);x=dict(r.candle);x['timestamp']=datetime.fromisoformat(str(x['timestamp']).replace('Z','+00:00'));return paper_service.process_candle(Candle.model_validate(x),_parse_strategy(r.strategy),_parse_risk(r.risk))
+        r=PaperProcessRequest.model_validate(payload);x=dict(r.candle);x['timestamp']=datetime.fromisoformat(str(x['timestamp']).replace('Z','+00:00'));return _persist(paper_service.process_candle(Candle.model_validate(x),_parse_strategy(r.strategy),_parse_risk(r.risk)))
     except (KeyError,ValueError,TypeError) as exc:raise HTTPException(status_code=400,detail=str(exc)) from exc
 @app.get('/paper/state',response_model=PaperAccount)
 def get_paper_state()->PaperAccount:
@@ -151,4 +157,4 @@ def get_paper_performance()->PaperPerformanceSnapshot:
     try:return paper_service.performance()
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc)) from exc
 @app.post('/paper/reset',response_model=PaperAccount)
-def reset_paper()->PaperAccount:return paper_service.reset()
+def reset_paper()->PaperAccount:return _persist(paper_service.reset())
