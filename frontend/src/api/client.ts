@@ -1,6 +1,8 @@
 import type{AutoPaperCycleResult,BacktestEvaluateRequest,BacktestResult,Candle,HealthResponse,IndicatorSnapshot,PaperAccount,PaperPerformanceSnapshot,PaperProcessRequest,PaperStartRequest,RiskEvaluateRequest,RiskResult,StrategyResult}from'./types'
 export type MarketSource='mock'|'binance'
-export type ManualTradeResult={action:'BUY'|'SELL';executed:boolean;decision:string;strategy:StrategyResult;gate:unknown;auto_stop:unknown;execution_price:number|null;reason:string;account:PaperAccount}
+export type ManualRiskEvidence={rule:string;status:'PASS'|'WARNING'|'BLOCK';value:number|boolean;threshold:number|boolean|null;description:string}
+export type ManualRiskGate={risk:{decision:string;strategy_assessment:string;strategy_score:number;evidence:ManualRiskEvidence[];block_reasons:string[];warning_reasons:string[]}|null;reason:string;recommendations:string[]}
+export type ManualTradeResult={action:'BUY'|'SELL';executed:boolean;decision:string;strategy:StrategyResult;gate:ManualRiskGate|null;auto_stop:unknown;execution_price:number|null;reason:string;account:PaperAccount}
 const API_BASE_URL=(import.meta.env.VITE_API_URL||'http://localhost:8000').replace(/\/+$/,'')
 async function request<T>(path:string,init?:RequestInit):Promise<T>{const response=await fetch(`${API_BASE_URL}${path}`,{...init,headers:{Accept:'application/json',...init?.headers}});if(!response.ok){let detail=`${response.status} ${response.statusText}`;try{const body=(await response.json())as{detail?:string};if(body.detail)detail=body.detail}catch{/* preserve */}throw new Error(detail)}return response.json()as Promise<T>}
 function query(path:string,params:Record<string,string|number>):string{const s=new URLSearchParams();Object.entries(params).forEach(([k,v])=>s.set(k,String(v)));return`${path}?${s.toString()}`}
